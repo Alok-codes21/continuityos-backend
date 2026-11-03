@@ -1,10 +1,12 @@
 
 import os
 
-from flask import Flask, jsonify
+from flask import Flask, app, jsonify
 from app.extensions import db, migrate, jwt
 from app import models
 from app.knowledge.routes import knowledge_bp
+from app.knowledge.graph import graph_bp
+from app.knowledge.ledger import ledger_bp
 
 
 def create_app(test_config=None):
@@ -37,6 +39,8 @@ def create_app(test_config=None):
     app.register_blueprint(projects_bp)
     app.register_blueprint(ingestion_bp)
     app.register_blueprint(knowledge_bp)
+    app.register_blueprint(graph_bp)
+    app.register_blueprint(ledger_bp)
 
     @app.get("/api/health")
     def health():

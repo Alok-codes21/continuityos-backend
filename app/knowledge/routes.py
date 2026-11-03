@@ -15,6 +15,7 @@ from app.models.core import (
     AuditEvent,
 )
 from app.knowledge.extractor import extract_candidates
+from app.models.core import ContinuityEvent
 
 
 knowledge_bp = Blueprint(
@@ -126,6 +127,19 @@ def extract_project_knowledge(project_id):
         resource_id=project_id,
     ))
 
+    db.session.add(ContinuityEvent(
+        project_id=project_id,
+        actor_id=user_id,
+        event_type="knowledge.extracted",
+        entity_type="project",
+        entity_id=project_id,
+        summary=f"Knowledge extraction created {created_count} candidates",
+        after_state={
+            "created": created_count,
+            "skipped_existing": skipped_count,
+        },
+    ))
+
     db.session.commit()
 
     return jsonify({
@@ -223,10 +237,30 @@ def review_knowledge(project_id, item_id):
             "error": "decision must be 'approve' or 'reject'"
         }), 400
 
+    previous_state = {
+    "status": item.status,
+    "uncertainty": item.uncertainty,
+}
+
     item.status = "approved" if decision == "approve" else "rejected"
     item.uncertainty = "verified" if decision == "approve" else "inferred"
     item.reviewed_by = user_id
     item.reviewed_at = datetime.now(timezone.utc)
+
+    db.session.add(ContinuityEvent(
+        project_id=project_id,
+        actor_id=user_id,
+        event_type=f"knowledge.{decision}",
+        entity_type="knowledge_item",
+        entity_id=item.id,
+        summary=f"Knowledge item '{item.title}' was {decision}d",
+        before_state=previous_state,
+        after_state={
+            "status": item.status,
+            "uncertainty": item.uncertainty,
+        },
+        evidence_document_id=item.document_id,
+    ))
 
     db.session.add(AuditEvent(
         organisation_id=project.organisation_id,

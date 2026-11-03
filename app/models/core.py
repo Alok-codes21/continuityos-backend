@@ -207,3 +207,34 @@ class KnowledgeItem(db.Model):
             name="uq_knowledge_chunk_type_title"
         ),
     )
+
+
+class ContinuityEvent(db.Model):
+    __tablename__ = "continuity_events"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    project_id = db.Column(
+        db.String(36), db.ForeignKey("projects.id"), nullable=False, index=True
+    )
+    actor_id = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=True
+    )
+
+    event_type = db.Column(db.String(60), nullable=False, index=True)
+    entity_type = db.Column(db.String(40), nullable=False)
+    entity_id = db.Column(db.String(36), nullable=False, index=True)
+    summary = db.Column(db.Text, nullable=False)
+
+    before_state = db.Column(db.JSON, nullable=True)
+    after_state = db.Column(db.JSON, nullable=True)
+
+    evidence_document_id = db.Column(
+        db.String(36), db.ForeignKey("documents.id"), nullable=True
+    )
+
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
