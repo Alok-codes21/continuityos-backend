@@ -483,3 +483,25 @@ def test_reverify_flow(client):
     got = client.get(f"/api/projects/{pid}/claims/{cid}", headers=A).json()
     assert got["freshness"] == "current" and "needs_reverification" not in got["details"] and got["details"]["reverified_by"] == gargi["user_id"]
     assert cid not in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
+
+
+def test_meeting_notes_participants_and_links(client):
+    admin, priya, gargi, yen, org, pid = setup_team(client)
+    notes = ("Meeting notes - payments sync\n"
+             "Attendees: Priya Sharma, Gargi Yadav\n"
+             "We decided to switch the payments-service cache to Redis because lookups are slow.\n"
+             "Action item: update the payments-service runbook assigned to @gargi\n"
+             "Who owns the invoice-worker retry policy?")
+    r = up(client, admin["token"], pid, "payments-sync-notes.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    cl = client.get(f"/api/projects/{pid}/claims", headers=H(admin["token"])).json()
+    cats = {(c["category"], c["statement"]) for c in cl}
+    assert any(c["category"] == "attendance" and "Gargi Yadav" in c["statement"] for c in cl)
+    assert any(c["category"] == "decision" and "Redis" in c["statement"] for c in cl)
+    assert any(c["category"] == "task" and "runbook" in c["statement"] for c in cl)
+    assert any(c["category"] == "question" for c in cl)
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(admin["token"])).json()
+    assert recs[0]["record_type"] == "meeting"
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(admin["token"])).json()
+    etypes = {e["relation"] for e in g["edges"]}
+    assert "attended" in etypes and "decided_in" in etypes and "action_from" in etypes and "raised_in" in etypes

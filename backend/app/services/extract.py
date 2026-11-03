@@ -82,12 +82,26 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
     items = []
     seen = set()
     ctx_comp = _title_component(title, content)
+    is_meeting = record_type == "meeting" or bool(re.search(
+        r"(?i)\b(attendees\s*:|meeting notes|minutes of|standup|weekly sync|1:1\b)", (title or "") + "\n" + (content or "")[:600]))
+
 
     def add(it):
         key = (it.category, it.subject_key, it.statement.lower())
         if key not in seen:
             seen.add(key)
             items.append(it)
+
+    if is_meeting:
+        people = list(meta.get("participants") or [])
+        for line in (content or "").splitlines():
+            am = re.search(r"(?i)\b(?:attendees|participants)\s*:\s*(.+)", line)
+            if am:
+                people += re.split(r",| and ", am.group(1))
+        for nm in dict.fromkeys(p.strip().strip(".@") for p in people if p and p.strip()):
+            if 1 < len(nm) <= 60:
+                add(Item("attendance", f"attendance:{slug(title or 'meeting', 40)}:{person_key(nm)}",
+                         f"{nm} attended: {(title or 'meeting')[:80]}", {"person": nm}, "evidence_backed", nm))
 
     if record_type == "codeowners":
         for line in content.splitlines():
@@ -144,7 +158,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
                      "evidence_backed" if why else "inferred", s))
 
         # tasks
-        tm = re.search(r"(?i)(?:\bTODO\b[:\s]*|\btask\s*[:\-]\s*|^[-*]\s*\[( |x)\]\s*)(.+)", s)
+        tm = re.search(r"(?i)(?:\bTODO\b[:\s]*|\btask\s*[:\-]\s*|\baction item\s*[:\-]\s*|^[-*]\s*\[( |x)\]\s*)(.+)", s)
         if tm:
             title = tm.group(2).strip() if tm.lastindex and tm.lastindex >= 2 else s
             asg = re.search(r"(?i)(?:assigned to\s+@?|assignee[:\s]+@?|owner[:\s]+@?|@)([A-Za-z][\w.\-]+)", s)
@@ -158,7 +172,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
         if record_type == "issue" and not re.search(r"(?i)^(?:feature|enhancement)", title):
             pass
         bug_words = r"(?i)\b(bug|crash|regression|fails?|failure|broken" + (r"|incident|outage" if record_type == "issue" else "") + r")\b"
-        if re.search(bug_words, s) and record_type in ("issue", "pull_request", "document", "commit", "message"):
+        if re.search(bug_words, s) and record_type in ("issue", "pull_request", "document", "commit", "message", "meeting"):
             resolved = bool(re.search(r"(?i)\b(fix(?:ed|es)?|resolved|closes?|closed|patched)\b", s)) or meta.get("state") == "closed"
             add(Item("bug", f"bug:{slug(s, 70)}", s.rstrip("."), {"resolved": resolved, "component": comp, "assignees": meta.get("assignees", [])},
                      "evidence_backed", s))
@@ -201,7 +215,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
                      {"concept": concept, "value": val, "component": base}, "evidence_backed", s))
 
         # questions
-        if s.endswith("?") and len(s) > 20 and record_type in ("document", "message", "issue"):
+        if s.endswith("?") and len(s) > 20 and record_type in ("document", "message", "issue", "meeting"):
             add(Item("question", f"question:{slug(s, 70)}", s, {}, "inferred", s))
 
     if record_type == "commit" and author:

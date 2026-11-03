@@ -91,8 +91,9 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
     flagged = db.query(m.SourceRecord).filter_by(project_id=project.id, injection_suspected=True).count()
     redacted = sum(r.redactions or 0 for r in db.query(m.SourceRecord).filter_by(project_id=project.id))
     if unverified:
-        add("limitations", f"{len(unverified)} item(s) are not verified", "These are inferred, outdated or conflicting. Treat them as leads, not facts: " +
-            "; ".join(c.statement[:80] for c in unverified[:5]), status="inferred")
+        add("limitations", f"{len(unverified)} item(s) are not verified", "These are inferred, outdated or conflicting. Treat them as leads, not facts.", status="inferred")
+        for c in unverified[:5]:
+            add("limitations", c.statement[:120], f"Not verified ({c.status}). Re-verify before relying on it.", c, status=c.status)
     if stale:
         add("limitations", f"{len(stale)} item(s) may be out of date", "Their sources are old or changed since. Re-verify before relying on them.", status="outdated")
     if flagged:

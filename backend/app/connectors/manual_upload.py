@@ -50,5 +50,8 @@ class ManualUploadConnector(SourceConnector):
     def revoke_access(self): return None
 
     def normalize_record(self, raw, source_ref="uploads"):
-        return NormalizedRecord("manual_upload", raw["filename"], "document", raw["filename"], raw["text"], raw.get("author"),
+        import re
+        rt = "meeting" if re.search(r"(?i)\b(attendees\s*:|meeting notes|minutes of|standup|weekly sync|1:1\b)",
+                                    raw["filename"] + "\n" + (raw["text"] or "")[:600]) else "document"
+        return NormalizedRecord("manual_upload", raw["filename"], rt, raw["filename"], raw["text"], raw.get("author"),
                                 None, raw.get("occurred_at"), source_ref)

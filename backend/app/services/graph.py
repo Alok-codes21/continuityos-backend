@@ -181,6 +181,14 @@ def rebuild_graph(db, pid):
                     edge(mn, cn, "discussed", _vmap(c.status), c)
                 if rec.author:
                     edge(ensure_person(db, pid, rec.author), mn, "attended", "inferred", c)
+                if c.category == "attendance" and d.get("person"):
+                    edge(ensure_person(db, pid, d["person"]), mn, "attended", _vmap(c.status), c)
+                elif c.category == "decision":
+                    edge(ensure_node(db, pid, "decision", c.subject_key, c.statement[:80]), mn, "decided_in", _vmap(c.status), c)
+                elif c.category == "task":
+                    edge(ensure_node(db, pid, "task", c.subject_key, c.statement[:80]), mn, "action_from", _vmap(c.status), c)
+                elif c.category == "question":
+                    edge(ensure_node(db, pid, "question", c.subject_key, c.statement[:80]), mn, "raised_in", _vmap(c.status), c)
     # contributors to each repository, and risks attached to components named in their text
     for rec in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == pid, m.SourceRecord.source_id.isnot(None), m.SourceRecord.author.isnot(None)):
         sr = srcs.get(rec.source_id)
