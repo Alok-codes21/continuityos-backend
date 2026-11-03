@@ -135,3 +135,17 @@ revoke it at the provider separately. Imported data requires a separate deletion
 Unanswered questions are rechecked against the original role; missing evidence
 keeps the gap open, and supported evidence closes it. Generic contradiction
 detection remains limited to explicit configuration values.
+
+
+Source person labels no longer auto-bind employee accounts, even on an exact
+name match. A manager must first PUT `/api/projects/{id}/graph/people/{key}/account`
+with a project member's `user_id` after checking the identity. Interviews require
+this binding. Two people bound to different accounts cannot be merged. Do not use
+an extracted first name as authority to let someone confirm an employee answer.
+Interview progress counts approved answers, not submitted drafts; confirmation is
+idempotent and pending approvals block completion. Corrections are re-extracted
+as one unambiguous claim of the same category; unsupported free-form edits return
+422 rather than leaving graph fields inconsistent. Scope-change approvals currently
+cover inclusion/exclusion only, not date/type/file-selection edits. Graph edges
+retain a primary claim reference; complete supporting evidence is available on
+claims, but a relationship-evidence join table is still a future improvement.

@@ -23,6 +23,9 @@ def load_docs(client, admin, pid):
         r = up(client, admin["token"], pid, n, t, author="Priya Sharma")
         assert r.status_code == 201, r.text
         assert r.json()["stored"] == 1
+    members = client.get(f"/api/orgs/{admin['org_id']}/members", headers=H(admin['token'])).json()
+    priya = next(x for x in members if x['name'] == 'Priya Sharma')
+    assert client.put(f"/api/projects/{pid}/graph/people/priyasharma/account", headers=H(admin['token']), json={'user_id':priya['user_id']}).status_code == 200
 
 
 def test_register_login_and_rbac(client):

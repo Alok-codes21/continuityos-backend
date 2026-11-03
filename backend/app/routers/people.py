@@ -89,6 +89,10 @@ def confirm(interview_id: str, response_id: str, ctx=Depends(need("contributor")
 @router.post("/interviews/{interview_id}/complete")
 def complete(interview_id: str, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     iv = _iv(db, ctx, interview_id)
+    pending = db.query(m.Approval).filter_by(project_id=ctx.pid, kind="interview_answer", status="pending").all()
+    response_ids = {r.id for r in db.query(m.InterviewResponse).filter_by(interview_id=iv.id)}
+    if any(a.target_id in response_ids for a in pending):
+        raise HTTPException(409, "Decide pending interview answers before completion")
     iv.status = "completed"
     db.commit()
     return {"ok": True}

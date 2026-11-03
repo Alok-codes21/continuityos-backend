@@ -41,7 +41,7 @@ def overview(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     score = round(100 * sum(WEIGHTS.get(k, 0) * v for k, v in counts.items()) / live) if live else 0
     ok_claims = {c.id for c in access.visible_claims(db, ctx.pid, ctx.org_role)}
     decisions = [d for d in db.query(m.Decision).filter_by(project_id=ctx.pid).order_by(m.Decision.decided_at.desc())
-                 if not d.claim_id or d.claim_id in ok_claims][:5]
+                 if d.claim_id in ok_claims][:5]
     today = m.now().date()
     days = {(today - timedelta(days=i)): 0 for i in range(13, -1, -1)}
     for r in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == ctx.pid, m.SourceRecord.ingested_at >= m.now() - timedelta(days=14)):
@@ -142,7 +142,8 @@ def ledger_verify(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
 @router.get("/graph")
 def graph_view(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     restricted_claims = {c.id for c in db.query(m.Claim).filter_by(project_id=ctx.pid) if not access.can_see_level(ctx.org_role, access.claim_level(db, c))}
-    edges = [e for e in db.query(m.GraphEdge).filter_by(project_id=ctx.pid) if e.claim_id not in restricted_claims]
+    edges = [e for e in db.query(m.GraphEdge).filter_by(project_id=ctx.pid) if e.claim_id not in restricted_claims
+             and (not e.record_id or ((rec := db.get(m.SourceRecord, e.record_id)) is not None and access.visible_record(rec, ctx.org_role)))]
     used = {e.src_id for e in edges} | {e.dst_id for e in edges}
     seen_keys = set()
     for c in access.visible_claims(db, ctx.pid, ctx.org_role):
@@ -159,6 +160,18 @@ def graph_view(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
 def people(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     return [{"key": p.key, "name": p.name, "user_id": p.user_id, "aliases": p.props.get("display_aliases", [])}
             for p in db.query(m.GraphNode).filter_by(project_id=ctx.pid, node_type="person")]
+
+
+@router.put("/graph/people/{person_key}/account")
+def bind_person(person_key: str, body: dict, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    person = graph.resolve_person(db, ctx.pid, person_key)
+    user_id = body.get("user_id")
+    if not person or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=user_id).first():
+        raise HTTPException(404, "Person or project member not found")
+    person.user_id = user_id
+    audit(db, "person_account_bound", ctx.user, ctx.org_id, ctx.pid, "person", person.id, user_id=user_id)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/graph/people/merge")
