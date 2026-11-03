@@ -10,7 +10,7 @@ from . import access, graph, ledger, risk
 SECTIONS = [("summary", "Summary of responsibilities"), ("ownership", "Ownership and backups"), ("systems", "Systems and dependencies"),
             ("decisions", "Decisions and reasoning"), ("procedures", "Procedures and runbooks"), ("open_work", "Open work and risks"),
             ("gaps", "Knowledge still missing"),
-            ("contacts", "Important contacts"), ("deployment", "Deployment and release instructions"), ("first_actions", "Recommended first actions")]
+            ("contacts", "Important contacts"), ("deployment", "Deployment and release instructions"), ("first_actions", "Recommended first actions"), ("limitations", "Known limitations of this handover")]
 
 
 def _evidence(db, claim, role):
@@ -85,6 +85,21 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
         if c.category == "procedure" and not d.get("draft") and c.status != "missing" and d.get("component") in comps and \
                 re.search(r"(?i)deploy|release|rollback|ship|pipeline|ci/cd", f"{d.get('topic', '')} {c.statement}"):
             add("deployment", f"{d.get('topic', 'deployment')} for {d.get('component')}", c.statement, c)
+    # known limitations: what this document cannot vouch for
+    unverified = [c for c in live if c.status in ("inferred", "outdated", "conflicting") and not c.details.get("draft")]
+    stale = [c for c in live if c.details.get("needs_reverification") or c.freshness == "stale"]
+    flagged = db.query(m.SourceRecord).filter_by(project_id=project.id, injection_suspected=True).count()
+    redacted = sum(r.redactions or 0 for r in db.query(m.SourceRecord).filter_by(project_id=project.id))
+    if unverified:
+        add("limitations", f"{len(unverified)} item(s) are not verified", "These are inferred, outdated or conflicting. Treat them as leads, not facts: " +
+            "; ".join(c.statement[:80] for c in unverified[:5]), status="inferred")
+    if stale:
+        add("limitations", f"{len(stale)} item(s) may be out of date", "Their sources are old or changed since. Re-verify before relying on them.", status="outdated")
+    if flagged:
+        add("limitations", f"{flagged} source record(s) were excluded", "They looked like prompt-injection attempts and were not used.", status="derived")
+    if redacted:
+        add("limitations", f"{redacted} secret/personal value(s) were redacted", "Credentials and emails are masked, so some details are intentionally absent.", status="derived")
+    add("limitations", "Coverage", "Only connected and selected sources, and only contributors who consented, are covered. Anything discussed elsewhere is not here.", status="derived")
     # first actions: derived from the risks and open gaps found above
     for r in sim["components"]:
         if not r["remaining_holders"]:
