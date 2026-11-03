@@ -564,3 +564,10 @@ def test_gdrive_default_scope_and_meeting_decision_participants(client, monkeypa
     db.close()
     g = client.get(f"/api/projects/{pid}/graph", headers=H(t)).json()
     assert any(e["relation"] == "participated_in" for e in g["edges"])
+
+
+def test_connector_scope_mismatch_rejected(client):
+    a = register(client, "sc2@x.io", "S2")
+    org, t = a["org_id"], a["token"]
+    assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "slack", "token": "tok", "consent": True,
+                                                             "scopes": {"permissions": ["repo"]}}, headers=H(t)).status_code == 422

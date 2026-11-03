@@ -94,19 +94,19 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
     redacted = sum(r.redactions or 0 for r in redacted_recs)
     if unverified:
         add("limitations", f"{len(unverified)} item(s) are not verified", "These are inferred, outdated or conflicting. Treat them as leads, not facts.", status="inferred")
-        for c in unverified[:5]:
+        for c in unverified:
             add("limitations", c.statement[:120], f"Not verified ({c.status}). Re-verify before relying on it.", c, status=c.status)
     if stale:
         add("limitations", f"{len(stale)} item(s) may be out of date", "Their sources are old or changed since. Re-verify before relying on them.", status="outdated")
-        for c in stale[:5]:
+        for c in stale:
             add("limitations", c.statement[:120], "May be out of date: the source is old or changed. Re-verify before relying on it.", c, status="outdated")
     if flagged:
         add("limitations", f"{flagged} source record(s) were excluded", "They looked like prompt-injection attempts and were not used.", status="derived")
-        for r in flagged_recs[:5]:
+        for r in flagged_recs:
             add("limitations", f"Excluded: {(r.title or r.external_id or 'record')[:110]}", "This source record looked like a prompt-injection attempt and was not used.", status="derived")
     if redacted:
         add("limitations", f"{redacted} secret/personal value(s) were redacted", "Credentials and emails are masked, so some details are intentionally absent.", status="derived")
-        for r in redacted_recs[:5]:
+        for r in redacted_recs:
             add("limitations", f"Redacted: {(r.title or r.external_id or 'record')[:110]}", f"{r.redactions} secret/personal value(s) in this record are masked.", status="derived")
     add("limitations", "Coverage", "Only connected and selected sources, and only contributors who consented, are covered. Anything discussed elsewhere is not here.", status="derived")
     # first actions: derived from the risks and open gaps found above

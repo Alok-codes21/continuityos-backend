@@ -38,6 +38,9 @@ def _org(org_id, db, user, min_role):
 SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
                "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
 CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "google_drive": ["documents"], "manual_upload": ["documents"]}
+# which scopes each connector may hold; anything else is rejected
+CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners"},
+                    "slack": {"messages"}, "google_drive": {"documents"}, "manual_upload": {"documents"}}
 
 
 class ConnectIn(BaseModel):
@@ -65,6 +68,13 @@ def connect(org_id: str, body: ConnectIn, db: Session = Depends(get_db), user: m
         raise HTTPException(501, f"{entry['name']} is not available yet")
     if not body.consent:
         raise HTTPException(422, "Explicit consent is required before connecting a source")
+    req_scopes = (body.scopes.get("permissions") or []) if isinstance(body.scopes, dict) else []
+    unknown = [sc for sc in req_scopes if sc not in SCOPE_TYPES]
+    if unknown:
+        raise HTTPException(422, f"Unknown scopes: {', '.join(unknown)}")
+    wrong = [sc for sc in req_scopes if sc not in CONNECTOR_SCOPES.get(body.connector, set())]
+    if wrong:
+        raise HTTPException(422, f"Scopes not valid for {body.connector}: {', '.join(wrong)}")
     conn = catalog.get_connector(body.connector, body.token)
     try:
         if body.connector != "manual_upload":
@@ -77,10 +87,6 @@ def connect(org_id: str, body: ConnectIn, db: Session = Depends(get_db), user: m
     db.add(integ)
     db.flush()
     db.add(m.ConsentRecord(org_id=org_id, integration_id=integ.id, user_id=user.id, kind="connect", granted=True))
-    req_scopes = (body.scopes.get("permissions") or []) if isinstance(body.scopes, dict) else []
-    unknown = [sc for sc in req_scopes if sc not in SCOPE_TYPES]
-    if unknown:
-        raise HTTPException(422, f"Unknown scopes: {', '.join(unknown)}")
     for s in req_scopes or CONNECTOR_DEFAULT_SCOPES.get(body.connector, []):
         db.add(m.IntegrationPermission(integration_id=integ.id, scope=s, approved=True))
     audit(db, "integration_connected", user, org_id, target_type="integration", target_id=integ.id, connector=body.connector)
