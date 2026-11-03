@@ -323,3 +323,142 @@
         flex-direction: column;
     }
 }
+
+
+.ledger-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ledger-actions input {
+    min-width: 220px;
+}
+
+#extractKnowledgeBtn {
+    min-height: 42px;
+    background: var(--teal);
+    border-color: var(--teal);
+    color: white;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+#extractKnowledgeBtn:hover {
+    background: var(--teal-dark);
+    border-color: var(--teal-dark);
+}
+
+#extractKnowledgeBtn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.knowledge-notice {
+    padding: 12px 15px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.knowledge-notice.success {
+    background: #e7f5ef;
+    color: #247a59;
+}
+
+.knowledge-notice.error {
+    background: #fceaea;
+    color: #b54c4c;
+}
+
+.record-main {
+    width: 100%;
+    min-width: 0;
+}
+
+.record-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 9px;
+}
+
+.record-title-row h6 {
+    margin: 0;
+}
+
+.evidence-block {
+    background: #f5f8fa;
+    border-left: 3px solid var(--teal);
+    border-radius: 5px;
+    padding: 11px 13px;
+    margin: 12px 0;
+}
+
+.evidence-block strong {
+    display: block;
+    color: var(--navy);
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.evidence-block p {
+    margin: 0;
+    color: #657286;
+    font-size: 12px;
+    white-space: pre-wrap;
+}
+
+.record-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 13px;
+}
+
+.btn-approve {
+    background: #e7f5ef;
+    color: #247a59;
+    border: 1px solid #cce9dc;
+}
+
+.btn-approve:hover {
+    background: #d4eee1;
+    color: #185d42;
+}
+
+.btn-reject {
+    background: #fceaea;
+    color: #b54c4c;
+    border: 1px solid #f3d0d0;
+}
+
+.btn-reject:hover {
+    background: #f7dada;
+    color: #913939;
+}
+
+.status-rejected {
+    background: #fceaea;
+    color: #b54c4c;
+}
+
+@media (max-width: 650px) {
+    .ledger-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .ledger-actions input {
+        min-width: 0;
+        max-width: none;
+    }
+
+    .record-title-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

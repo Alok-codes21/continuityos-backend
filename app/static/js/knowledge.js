@@ -1,3 +1,4 @@
+
 const API_BASE = "";
 const token = sessionStorage.getItem("access_token");
 
@@ -5,6 +6,8 @@ const projectSelect = document.getElementById("projectSelect");
 const knowledgeList = document.getElementById("knowledgeList");
 const graphCanvas = document.getElementById("graphCanvas");
 const graphDetails = document.getElementById("graphDetails");
+const extractButton = document.getElementById("extractKnowledgeBtn");
+const notice = document.getElementById("knowledgeNotice");
 
 let currentRecords = [];
 let currentNodes = [];
@@ -12,20 +15,31 @@ let currentEdges = [];
 
 function escapeText(value) {
     return String(value ?? "").replace(/[&<>"']/g, char => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;",
-        '"': "&quot;", "'": "&#039;"
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
     })[char]);
 }
 
-async function request(path) {
+async function request(path, options = {}) {
+    const headers = {
+        Authorization: `Bearer ${token}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {})
+    };
+
     const response = await fetch(`${API_BASE}${path}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        ...options,
+        headers
     });
 
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-        throw new Error(data.error || data.message || `Request failed (${response.status})`);
+        throw new Error(
+            data.error || data.message || `Request failed (${response.status})`
+        );
     }
 
     return data;
@@ -41,33 +55,60 @@ function getArray(data, possibleKeys) {
     return [];
 }
 
+function showNotice(message, type = "success") {
+    notice.className = `knowledge-notice ${type}`;
+    notice.textContent = message;
+}
+
+function hideNotice() {
+    notice.className = "knowledge-notice d-none";
+    notice.textContent = "";
+}
+
 function recordStatus(record) {
-    return String(
-        record.status || record.review_status || record.confidence_status || "unknown"
-    ).toLowerCase();
+    return String(record.status || "unknown").toLowerCase();
 }
 
 function statusClass(status) {
-    if (["approved", "verified"].includes(status)) return "status-approved";
-    if (["inferred", "pending", "awaiting_review"].includes(status)) return "status-inferred";
-    if (status.includes("conflict")) return "status-conflicting";
-    if (status.includes("missing")) return "status-missing";
+    if (["approved", "verified"].includes(status)) {
+        return "status-approved";
+    }
+
+    if (["inferred", "pending", "awaiting_review", "needs_review"].includes(status)) {
+        return "status-inferred";
+    }
+
+    if (status.includes("reject")) {
+        return "status-rejected";
+    }
+
+    if (status.includes("conflict")) {
+        return "status-conflicting";
+    }
+
+    if (status.includes("missing")) {
+        return "status-missing";
+    }
+
     return "status-unknown";
 }
 
 function renderRecords(records) {
     currentRecords = records;
 
-    const verified = records.filter(r =>
-        ["approved", "verified"].includes(recordStatus(r))
+    const verified = records.filter(record =>
+        ["approved", "verified"].includes(recordStatus(record))
     ).length;
 
-    const awaiting = records.filter(r =>
-        ["inferred", "pending", "awaiting_review"].includes(recordStatus(r))
+    const awaiting = records.filter(record =>
+        ["needs_review", "inferred", "pending", "awaiting_review"]
+            .includes(recordStatus(record))
     ).length;
 
-    const uncertain = records.filter(r =>
-        ["conflicting", "missing"].some(s => recordStatus(r).includes(s))
+    const uncertain = records.filter(record =>
+        ["conflicting", "missing"].some(status =>
+            String(record.uncertainty || "").includes(status)
+        )
     ).length;
 
     document.getElementById("totalRecords").textContent = records.length;
@@ -79,15 +120,18 @@ function renderRecords(records) {
 }
 
 function filterAndDisplayRecords() {
-    const query = document.getElementById("knowledgeSearch").value.toLowerCase();
+    const query = document
+        .getElementById("knowledgeSearch")
+        .value
+        .toLowerCase();
 
     const filtered = currentRecords.filter(record => {
         const searchable = [
             record.title,
-            record.content,
             record.description,
-            record.category,
-            record.statement,
+            record.type,
+            record.status,
+            record.uncertainty,
             record.evidence
         ].filter(Boolean).join(" ").toLowerCase();
 
@@ -95,32 +139,145 @@ function filterAndDisplayRecords() {
     });
 
     if (!filtered.length) {
-        knowledgeList.innerHTML = `<div class="empty-state">No matching knowledge records found.</div>`;
+        knowledgeList.innerHTML = `
+            <div class="empty-state">
+                No knowledge records found.
+                Upload project documents and run knowledge extraction to get started.
+            </div>
+        `;
         return;
     }
 
     knowledgeList.innerHTML = filtered.map(record => {
-        const title = record.title || record.name || record.category || "Untitled knowledge";
-        const content = record.content || record.description || record.statement || "No description provided.";
         const status = recordStatus(record);
-        const evidence = record.evidence || record.evidence_snippet || "";
-        const source = record.source_name || record.document_name || record.source_id || "Source not specified";
+        const needsReview = status === "needs_review";
+        const source = record.document_id
+            ? `Document ${record.document_id.slice(0, 8)}`
+            : "Source not specified";
 
         return `
             <article class="knowledge-record">
-                <div>
-                    <h6>${escapeText(title)}</h6>
-                    <p>${escapeText(content)}</p>
-                    ${evidence ? `<p><strong>Evidence:</strong> ${escapeText(evidence)}</p>` : ""}
-                    <div class="record-meta">
-                        ${escapeText(record.category || "General")}
-                        &nbsp;·&nbsp; Source: ${escapeText(source)}
+                <div class="record-main">
+                    <div class="record-title-row">
+                        <h6>${escapeText(record.title)}</h6>
+                        <span class="status-pill ${statusClass(status)}">
+                            ${escapeText(status.replaceAll("_", " "))}
+                        </span>
                     </div>
+
+                    <p>${escapeText(record.description || "No description provided.")}</p>
+
+                    ${record.evidence ? `
+                        <div class="evidence-block">
+                            <strong>Source evidence</strong>
+                            <p>${escapeText(record.evidence)}</p>
+                        </div>
+                    ` : ""}
+
+                    <div class="record-meta">
+                        ${escapeText(record.type || "General")}
+                        · ${escapeText(source)}
+                        · Confidence: ${escapeText(record.uncertainty || "unknown")}
+                    </div>
+
+                    ${needsReview ? `
+                        <div class="record-actions">
+                            <button
+                                class="btn btn-sm btn-approve"
+                                data-review-id="${escapeText(record.id)}"
+                                data-decision="approve">
+                                <i class="bi bi-check2 me-1"></i> Approve
+                            </button>
+
+                            <button
+                                class="btn btn-sm btn-reject"
+                                data-review-id="${escapeText(record.id)}"
+                                data-decision="reject">
+                                <i class="bi bi-x-lg me-1"></i> Reject
+                            </button>
+                        </div>
+                    ` : ""}
                 </div>
-                <span class="status-pill ${statusClass(status)}">${escapeText(status.replaceAll("_", " "))}</span>
             </article>
         `;
     }).join("");
+
+    knowledgeList.querySelectorAll("[data-review-id]").forEach(button => {
+        button.addEventListener("click", () => {
+            reviewKnowledge(
+                button.dataset.reviewId,
+                button.dataset.decision,
+                button
+            );
+        });
+    });
+}
+
+async function reviewKnowledge(itemId, decision, button) {
+    const projectId = projectSelect.value;
+    if (!projectId) return;
+
+    button.disabled = true;
+
+    try {
+        await request(
+            `/api/projects/${projectId}/knowledge/${itemId}/review`,
+            {
+                method: "POST",
+                body: JSON.stringify({ decision })
+            }
+        );
+
+        showNotice(
+            decision === "approve"
+                ? "Knowledge record approved."
+                : "Knowledge record rejected."
+        );
+
+        await loadProjectData(projectId);
+    } catch (error) {
+        showNotice(error.message, "error");
+        button.disabled = false;
+    }
+}
+
+async function extractKnowledge() {
+    const projectId = projectSelect.value;
+
+    if (!projectId) {
+        showNotice("Select a project first.", "error");
+        return;
+    }
+
+    extractButton.disabled = true;
+    extractButton.innerHTML = `
+        <span class="spinner-border spinner-border-sm me-2"></span>
+        Extracting...
+    `;
+
+    hideNotice();
+
+    try {
+        const result = await request(
+            `/api/projects/${projectId}/knowledge/extract`,
+            { method: "POST" }
+        );
+
+        showNotice(
+            `Extraction complete. ${result.created || 0} new records created; ` +
+            `${result.skipped_existing || 0} existing records skipped.`
+        );
+
+        await loadProjectData(projectId);
+    } catch (error) {
+        showNotice(error.message, "error");
+    } finally {
+        extractButton.disabled = false;
+        extractButton.innerHTML = `
+            <i class="bi bi-stars me-1"></i>
+            Extract knowledge
+        `;
+    }
 }
 
 function renderGraph(nodes, edges) {
@@ -128,18 +285,23 @@ function renderGraph(nodes, edges) {
     currentEdges = edges;
 
     if (!nodes.length) {
-        graphCanvas.innerHTML = `<div class="empty-state">No graph nodes were returned for this project.</div>`;
-        graphDetails.textContent = "There are no relationships to inspect.";
+        graphCanvas.innerHTML = `
+            <div class="empty-state">
+                No graph nodes found for this project.
+            </div>
+        `;
+        graphDetails.textContent = "No relationships to inspect.";
         return;
     }
 
     graphCanvas.innerHTML = nodes.map((node, index) => {
-        const type = String(node.type || node.node_type || "knowledge").toLowerCase();
-        const title = node.label || node.title || node.name || node.id || `Node ${index + 1}`;
+        const type = String(node.type || "knowledge").toLowerCase();
+        const title = node.label || node.title || node.id || `Node ${index + 1}`;
 
         return `
-            <button class="graph-node ${escapeText(type)}"
-                    data-node-index="${index}">
+            <button
+                class="graph-node ${escapeText(type)}"
+                data-node-index="${index}">
                 <small>${escapeText(type)}</small>
                 <strong>${escapeText(title)}</strong>
             </button>
@@ -153,18 +315,19 @@ function renderGraph(nodes, edges) {
             graphCanvas.querySelectorAll(".graph-node").forEach(item =>
                 item.classList.remove("selected")
             );
-            button.classList.add("selected");
 
+            button.classList.add("selected");
             showNodeDetails(node);
         });
     });
 
     graphDetails.textContent =
-        `${nodes.length} nodes and ${edges.length} relationships returned by the project graph API. Select a node to inspect its details.`;
+        `${nodes.length} nodes and ${edges.length} relationships. Select a node to inspect it.`;
 }
 
 function showNodeDetails(node) {
     const nodeId = node.id;
+
     const relatedEdges = currentEdges.filter(edge =>
         edge.source === nodeId ||
         edge.target === nodeId ||
@@ -172,26 +335,37 @@ function showNodeDetails(node) {
         edge.to === nodeId
     );
 
-    const title = node.label || node.title || node.name || node.id || "Graph node";
-
     graphDetails.innerHTML = `
-        <strong>${escapeText(title)}</strong>
-        <div class="mt-2">Type: ${escapeText(node.type || node.node_type || "Not specified")}</div>
-        <div class="mt-1">Relationships: ${relatedEdges.length}</div>
-        ${relatedEdges.length
-            ? `<ul class="mt-2 mb-0">${relatedEdges.map(edge => `
-                <li>${escapeText(edge.label || edge.type || "Related to")}</li>
-              `).join("")}</ul>`
-            : `<div class="mt-2">No relationships were returned for this node.</div>`
-        }
+        <strong>${escapeText(node.label || node.title || node.id)}</strong>
+        <div class="mt-2">
+            Type: ${escapeText(node.type || "Not specified")}
+        </div>
+        <div class="mt-1">
+            Status: ${escapeText(node.status || "Not specified")}
+        </div>
+        <div class="mt-1">
+            Relationships: ${relatedEdges.length}
+        </div>
+        ${relatedEdges.length ? `
+            <ul class="mt-2 mb-0">
+                ${relatedEdges.map(edge => `
+                    <li>${escapeText(edge.type || "Related to")}</li>
+                `).join("")}
+            </ul>
+        ` : ""}
     `;
 }
 
 async function loadProjectData(projectId) {
     if (!projectId) return;
 
-    knowledgeList.innerHTML = `<div class="empty-state">Loading knowledge records...</div>`;
-    graphCanvas.innerHTML = `<div class="empty-state">Loading graph...</div>`;
+    knowledgeList.innerHTML = `
+        <div class="empty-state">Loading knowledge records...</div>
+    `;
+
+    graphCanvas.innerHTML = `
+        <div class="empty-state">Loading graph...</div>
+    `;
 
     try {
         const [knowledgeResult, graphResult] = await Promise.all([
@@ -199,15 +373,22 @@ async function loadProjectData(projectId) {
             request(`/api/projects/${projectId}/graph`)
         ]);
 
-        renderRecords(getArray(knowledgeResult, ["items", "knowledge", "records"]));
+        renderRecords(
+            getArray(knowledgeResult, ["items", "knowledge", "records"])
+        );
 
         renderGraph(
             getArray(graphResult, ["nodes"]),
             getArray(graphResult, ["edges", "relationships"])
         );
     } catch (error) {
-        knowledgeList.innerHTML = `<div class="empty-state">${escapeText(error.message)}</div>`;
-        graphCanvas.innerHTML = `<div class="empty-state">${escapeText(error.message)}</div>`;
+        knowledgeList.innerHTML = `
+            <div class="empty-state">${escapeText(error.message)}</div>
+        `;
+
+        graphCanvas.innerHTML = `
+            <div class="empty-state">${escapeText(error.message)}</div>
+        `;
     }
 }
 
@@ -219,21 +400,25 @@ async function loadProjects() {
         projectSelect.innerHTML = "";
 
         if (!projects.length) {
-            projectSelect.innerHTML = `<option value="">No projects available</option>`;
+            projectSelect.innerHTML = `
+                <option value="">No projects available</option>
+            `;
             return;
         }
 
         projects.forEach(project => {
             const option = document.createElement("option");
             option.value = project.id;
-            option.textContent = project.name || project.title || "Untitled project";
+            option.textContent = project.name || "Untitled project";
             projectSelect.appendChild(option);
         });
 
         await loadProjectData(projectSelect.value);
     } catch (error) {
-        projectSelect.innerHTML = `<option value="">Could not load projects</option>`;
-        knowledgeList.innerHTML = `<div class="empty-state">${escapeText(error.message)}</div>`;
+        projectSelect.innerHTML = `
+            <option value="">Could not load projects</option>
+        `;
+        showNotice(error.message, "error");
     }
 }
 
@@ -246,14 +431,24 @@ document.querySelectorAll(".knowledge-tab").forEach(button => {
         button.classList.add("active");
 
         const showLedger = button.dataset.tab === "ledger";
-        document.getElementById("ledgerPanel").classList.toggle("d-none", !showLedger);
-        document.getElementById("graphPanel").classList.toggle("d-none", showLedger);
+
+        document.getElementById("ledgerPanel")
+            .classList.toggle("d-none", !showLedger);
+
+        document.getElementById("graphPanel")
+            .classList.toggle("d-none", showLedger);
     });
 });
 
-projectSelect.addEventListener("change", () => loadProjectData(projectSelect.value));
+projectSelect.addEventListener("change", () => {
+    hideNotice();
+    loadProjectData(projectSelect.value);
+});
 
-document.getElementById("knowledgeSearch").addEventListener("input", filterAndDisplayRecords);
+document.getElementById("knowledgeSearch")
+    .addEventListener("input", filterAndDisplayRecords);
+
+extractButton.addEventListener("click", extractKnowledge);
 
 function logout() {
     sessionStorage.removeItem("access_token");
