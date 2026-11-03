@@ -9,7 +9,19 @@ def available():
     return settings.llm_provider in ("gemini", "groq") and bool(settings.llm_api_key)
 
 
+def valid_citations(text, n):
+    """Accept model text only if it cites at least one excerpt and every [k] marker points at a supplied excerpt."""
+    import re
+    marks = [int(x) for x in re.findall(r"\[(\d+)\]", text or "")]
+    return bool(marks) and all(1 <= k <= n for k in marks)
+
+
 def rephrase(question, excerpts):
+    out = _rephrase(question, excerpts)
+    return out if out and valid_citations(out, len(excerpts)) else None
+
+
+def _rephrase(question, excerpts):
     if not available():
         return None
     prompt = ("Answer the question using ONLY the numbered excerpts. Cite as [n]. If they do not answer it, say so.\n\n"

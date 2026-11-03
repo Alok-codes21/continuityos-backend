@@ -106,8 +106,8 @@ def test_connector_catalog_and_unavailable(client):
     admin = register(client, "a@x.io", "A")
     cat = client.get("/api/integrations/catalog", headers=H(admin["token"])).json()
     st = {c["id"]: c["status"] for c in cat}
-    assert st["github"] == "available" and st["slack"] == "unavailable" and st["manual_upload"] == "available"
-    r = client.post(f"/api/orgs/{admin['org_id']}/integrations", json={"connector": "slack", "token": "x", "consent": True}, headers=H(admin["token"]))
+    assert st["github"] == "available" and st["slack"] == "available" and st["microsoft_teams"] == "unavailable" and st["manual_upload"] == "available"
+    r = client.post(f"/api/orgs/{admin['org_id']}/integrations", json={"connector": "microsoft_teams", "token": "x", "consent": True}, headers=H(admin["token"]))
     assert r.status_code == 501
     r = client.post(f"/api/orgs/{admin['org_id']}/integrations", json={"connector": "github", "token": "x", "consent": False}, headers=H(admin["token"]))
     assert r.status_code == 422

@@ -40,17 +40,19 @@ def locate(content: str, excerpt: str):
 
 
 def selection_allows(rec, selections):
-    """selections: list of SourceSelection rows for this source_ref. No rows = everything selected explicitly by the sync call."""
+    """selections: SourceSelection rows for this source_ref. No rows = everything selected explicitly by the sync call.
+    A record is allowed when ANY included selection matches it (several selections widen, they do not stack)."""
     if not selections:
         return True
     for s in selections:
         if not s.included:
-            return False
+            continue
         if rec.occurred_at and ((s.date_from and rec.occurred_at < s.date_from) or (s.date_to and rec.occurred_at > s.date_to)):
-            return False
+            continue
         if s.content_types and rec.record_type not in s.content_types:
-            return False
-    return True
+            continue
+        return True
+    return False
 
 
 def _upsert_claim(db, project, rec, item, quote_ok, location, author_user):

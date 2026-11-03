@@ -123,7 +123,7 @@ def graph_view(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
             if isinstance(c.details.get(k), str):
                 seen_keys.add(c.details[k])
     nodes = [n for n in db.query(m.GraphNode).filter_by(project_id=ctx.pid)
-             if n.node_type == "person" or n.id in used or (n.node_type in ("service", "module") and n.key in seen_keys)]
+             if n.id in used or (n.node_type in ("service", "module") and n.key in seen_keys)]
     return {"nodes": [{"id": n.id, "type": n.node_type, "key": n.key, "name": n.name, "user_id": n.user_id} for n in nodes],
             "edges": [{"id": e.id, "source": e.src_id, "target": e.dst_id, "relation": e.relation, "verification": e.verification, "claim_id": e.claim_id} for e in edges]}
 

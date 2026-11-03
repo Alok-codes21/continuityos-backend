@@ -245,6 +245,7 @@ class KnowledgeEvent(Base):
     """Append-only continuity ledger. Corrections create new rows; rows are never updated or deleted by the API."""
     __tablename__ = "knowledge_events"
     id: Mapped[str] = col_id("evt")
+    __table_args__ = (UniqueConstraint("project_id", "seq", name="uq_event_project_seq"),)
     project_id: Mapped[str] = mapped_column(String(40), index=True)
     seq: Mapped[int] = mapped_column(Integer, default=0)
     source_id: Mapped[str] = mapped_column(String(40), nullable=True)
