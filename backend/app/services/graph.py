@@ -160,6 +160,11 @@ def rebuild_graph(db, pid):
                 edge(bn, comp_node(d["component"]), "affects", ver, c)
             for a in d.get("assignees") or []:
                 edge(ensure_person(db, pid, a), bn, "working_on", ver, c)
+        elif c.category == "database":
+            dbn = ensure_node(db, pid, "database", d["database"].lower(), d["database"])
+            edge(dbn, pn, "part_of", ver, c)
+            if d.get("component") and comp_node(d["component"]):
+                edge(comp_node(d["component"]), dbn, "stores_in", ver, c)
         elif c.category == "api":
             an = ensure_node(db, pid, "api", c.subject_key, d["endpoint"])
             if d.get("component") and comp_node(d["component"]):
@@ -176,7 +181,7 @@ def rebuild_graph(db, pid):
                 edge(rn, cn, "affects", _vmap(c.status), c)
         if cn:
             edge(cn, pn, "part_of", "evidence_backed", c)
-        dbm = re.search(r"(?i)\b(postgres(?:ql)?|mysql|mariadb|mongodb|mongo|redis|dynamodb|cassandra|sqlite|elasticsearch)\b", c.statement)
+        dbm = re.search(r"(?i)\b(postgres(?:ql)?|mysql|mariadb|mongodb|mongo|redis|dynamodb|cassandra|sqlite|elasticsearch|clickhouse|supabase|firebase|neo4j)\b", c.statement)
         if dbm and cn:
             edge(cn, ensure_node(db, pid, "database", dbm.group(1).lower(), dbm.group(1)), "stores_in", _vmap(c.status), c)
         for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).all():

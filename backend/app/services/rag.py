@@ -83,7 +83,12 @@ def _supported(answer, citations):
             return False
         if set(re.findall(r"\b\d+\b", body)) - set(re.findall(r"\b\d+\b", ev_text)):
             return False
-        if llm.available() and llm.entails(ev_text, body) is False:
+        if llm.available():
+            # with a model configured, a sentence must be positively entailed; unclear or error means unsupported
+            if llm.entails(ev_text, body) is not True:
+                return False
+        elif words and len(words & ev) / len(words) < 0.75:
+            # without a model, the lexical bar is higher
             return False
     return True
 

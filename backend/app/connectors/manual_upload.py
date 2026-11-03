@@ -51,7 +51,7 @@ class ManualUploadConnector(SourceConnector):
 
     def normalize_record(self, raw, source_ref="uploads"):
         import re
-        rt = "meeting" if re.search(r"(?i)\b(attendees\s*:|meeting notes|minutes of|standup|weekly sync|1:1\b)",
-                                    raw["filename"] + "\n" + (raw["text"] or "")[:600]) else "document"
+        rt = "meeting" if re.search(r"(?i)\b(attendees\s*:|participants\s*:|present\s*:|in attendance|meeting notes|minutes of|standup|stand-up|weekly sync|sprint planning|retrospective|retro\b|kickoff|1:1\b|call notes)",
+                                    raw["filename"] + "\n" + (raw["text"] or "")[:1000]) else "document"
         return NormalizedRecord("manual_upload", raw["filename"], rt, raw["filename"], raw["text"], raw.get("author"),
                                 None, raw.get("occurred_at"), source_ref)

@@ -571,3 +571,31 @@ def test_connector_scope_mismatch_rejected(client):
     org, t = a["org_id"], a["token"]
     assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "slack", "token": "tok", "consent": True,
                                                              "scopes": {"permissions": ["repo"]}}, headers=H(t)).status_code == 422
+
+
+def test_stronger_llm_support_meeting_and_database_detection(client, monkeypatch):
+    from app.services import llm
+    from app.services.rag import _supported
+    cites = [{"quote": "Redis was picked because refund lookups need fast reads"}]
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "entails", lambda a, b: None)
+    assert not _supported("Redis was picked because refund lookups need fast reads [1].", cites)  # unclear entailment now fails
+    monkeypatch.setattr(llm, "entails", lambda a, b: True)
+    assert _supported("Redis was picked because refund lookups need fast reads [1].", cites)
+    monkeypatch.setattr(llm, "available", lambda: False)
+    # without a model the lexical bar is higher: only 60% of the words are in the excerpt
+    assert not _supported("Redis was picked because refund lookups need extra caching layers today [1].", cites)
+
+    admin, priya, gargi, yen, org, pid = setup_team(client)
+    notes = ("Sprint planning notes\nPresent: Priya Sharma, Gargi Yadav\n"
+             "We decided to keep sessions in redis because it is fast.\nDATABASE_URL=postgres://db.internal/app\n")
+    r = up(client, admin["token"], pid, "planning.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    cl = client.get(f"/api/projects/{pid}/claims", headers=H(admin["token"])).json()
+    assert sum(1 for c in cl if c["category"] == "attendance") == 2  # "Present:" line works too
+    assert {c["subject_key"] for c in cl if c["category"] == "database"} >= {"database:redis", "database:postgres"}
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(admin["token"])).json()
+    assert recs[0]["record_type"] == "meeting"  # "Sprint planning" counts as a meeting
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(admin["token"])).json()
+    assert any(n["type"] == "database" for n in g["nodes"])
+    assert any(e["relation"] == "part_of" for e in g["edges"])

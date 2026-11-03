@@ -84,7 +84,8 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
     meeting_people = []
     ctx_comp = _title_component(title, content)
     is_meeting = record_type == "meeting" or bool(re.search(
-        r"(?i)\b(attendees\s*:|meeting notes|minutes of|standup|weekly sync|1:1\b)", (title or "") + "\n" + (content or "")[:600]))
+        r"(?i)\b(attendees\s*:|participants\s*:|present\s*:|in attendance|meeting notes|minutes of|standup|stand-up|weekly sync|sprint planning|retrospective|retro\b|kickoff|1:1\b|call notes)",
+        (title or "") + "\n" + (content or "")[:1000]))
 
 
     def add(it):
@@ -96,7 +97,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
     if is_meeting:
         people = list(meta.get("participants") or [])
         for line in (content or "").splitlines():
-            am = re.search(r"(?i)\b(?:attendees|participants)\s*:\s*(.+)", line)
+            am = re.search(r"(?i)\b(?:attendees|participants|present|in attendance)\s*[:\-]\s*(.+)", line)
             if am:
                 people += re.split(r",| and ", am.group(1))
         meeting_people = [p.strip().strip(".@") for p in dict.fromkeys(people) if p and 1 < len(p.strip().strip(".@")) <= 60]
@@ -215,6 +216,12 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
             base = comp_base(comp) if comp else "general"
             add(Item("config_value", f"value:{base}:{concept}", f"{base}: {concept.replace('_', ' ')} = {val}",
                      {"concept": concept, "value": val, "component": base}, "evidence_backed", s))
+
+        dbm = re.search(r"(?i)\b(postgres(?:ql)?|mysql|mariadb|mongodb|mongo|redis|dynamodb|cassandra|sqlite|elasticsearch|clickhouse|supabase|firebase|neo4j)\b", s) or \
+            (re.search(r"\b(?:DATABASE_URL|DB_HOST|DB_NAME)\s*=", s) and re.search(r"(?i)\b(postgres(?:ql)?|mysql|mongodb|mongo|redis|sqlite)\b", s))
+        if dbm:
+            add(Item("database", f"database:{dbm.group(1).lower()}", f"{dbm.group(1)} is a database used by the project",
+                     {"database": dbm.group(1), "component": comp}, "evidence_backed", s))
 
         # questions
         if s.endswith("?") and len(s) > 20 and record_type in ("document", "message", "issue", "meeting"):
