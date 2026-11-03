@@ -98,14 +98,22 @@ def simulate(db, pid, person_key_, user=None, persist=True):
     else:
         level = "low"
 
+    key_to_id = {n.key: n.id for n in nodes.values() if n.node_type in ("service", "module")}
+
+    def _claims_for(comp_key, person_id):
+        """Claim ids of the qualified-holder links behind a statement, so every reason can be traced to evidence."""
+        rows = db.query(m.GraphEdge).filter(m.GraphEdge.project_id == pid, m.GraphEdge.dst_id == key_to_id.get(comp_key),
+                                            m.GraphEdge.relation.in_(QUALIFIED)).all()
+        return sorted({e.claim_id for e in rows if e.claim_id and (person_id is None or e.src_id == person_id)})
+
     why = []
     for r in orphaned:
         txt = f"{p.name} is the only qualified holder of {r['component']}; nobody else would be left."
         if r["dependents"]:
             txt += f" Depended on by: {', '.join(r['dependents'])}."
-        why.append({"text": txt, "kind": "orphaned_component", "component": r["key"]})
+        why.append({"text": txt, "kind": "orphaned_component", "component": r["key"], "claim_ids": _claims_for(r["key"], p.id)})
     for r in single:
-        why.append({"text": f"After {p.name} leaves, {r['component']} would rest on one person ({r['remaining_holders'][0]}).", "kind": "single_holder", "component": r["key"]})
+        why.append({"text": f"After {p.name} leaves, {r['component']} would rest on one person ({r['remaining_holders'][0]}).", "kind": "single_holder", "component": r["key"], "claim_ids": _claims_for(r["key"], None)})
     if decided:
         why.append({"text": f"Decision maker on {len(decided)} of {all_dec} decisions; {len(undoc)} have no recorded reasoning.", "kind": "decisions",
                     "decisions": len(decided), "total_decisions": all_dec, "without_reasoning": len(undoc)})

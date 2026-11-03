@@ -131,7 +131,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
         # decisions
         if re.search(r"(?i)\b(decided|decision|we chose|we agreed|agreed to|we will use|switch(?:ed)? to|adopt(?:ed)?|supersedes|replaces)\b", s):
             alt = re.search(r"(?i)\b(?:instead of|rather than|over)\s+([A-Za-z0-9][\w\-./ ]{1,40}?)(?=[.,;]|\s+because|\s+due|\s+since|\s+for\b|$)", s)
-            why = re.search(r"(?i)\b(?:because|due to|reason:?|since|after)\s+(.{6,200})", s)
+            why = re.search(r"(?i)\b(?:because|due to|reason:?)\s+(.{6,200})", s)
             sup = re.search(r"(?i)\b(?:supersedes|replaces|overrides)\s+(.{3,100}?)(?=[.;]|$)", s)
             stmt = s.rstrip(". ")
             by = author
