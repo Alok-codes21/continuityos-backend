@@ -8,3 +8,4 @@ from app.models.core import (
     AuditEvent,
 )
 from app.models.core import Source, Document, DocumentChunk
+from app.models.core import KnowledgeItem

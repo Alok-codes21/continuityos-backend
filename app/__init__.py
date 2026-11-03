@@ -4,6 +4,7 @@ import os
 from flask import Flask, jsonify
 from app.extensions import db, migrate, jwt
 from app import models
+from app.knowledge.routes import knowledge_bp
 
 
 def create_app(test_config=None):
@@ -35,6 +36,7 @@ def create_app(test_config=None):
     app.register_blueprint(auth_bp)
     app.register_blueprint(projects_bp)
     app.register_blueprint(ingestion_bp)
+    app.register_blueprint(knowledge_bp)
 
     @app.get("/api/health")
     def health():

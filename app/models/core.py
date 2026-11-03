@@ -158,3 +158,52 @@ class DocumentChunk(db.Model):
     __table_args__ = (
         db.UniqueConstraint("document_id", "chunk_index"),
     )
+
+
+class KnowledgeItem(db.Model):
+    __tablename__ = "knowledge_items"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    project_id = db.Column(
+        db.String(36), db.ForeignKey("projects.id"), nullable=False, index=True
+    )
+    document_id = db.Column(
+        db.String(36), db.ForeignKey("documents.id"), nullable=False, index=True
+    )
+    chunk_id = db.Column(
+        db.String(36), db.ForeignKey("document_chunks.id"), nullable=False, index=True
+    )
+
+    item_type = db.Column(db.String(40), nullable=False, index=True)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+
+    # needs_review, approved, rejected
+    status = db.Column(db.String(30), nullable=False, default="needs_review")
+
+    # inferred, verified, conflicting, outdated, missing
+    uncertainty = db.Column(db.String(30), nullable=False, default="inferred")
+
+    evidence_text = db.Column(db.Text, nullable=False)
+    evidence_location = db.Column(db.JSON, nullable=False, default=dict)
+
+    extracted_by = db.Column(db.String(40), nullable=False, default="rules-v1")
+    reviewed_by = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=True
+    )
+    reviewed_at = db.Column(
+        db.DateTime(timezone=True), nullable=True
+    )
+
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "chunk_id", "item_type", "title",
+            name="uq_knowledge_chunk_type_title"
+        ),
+    )
