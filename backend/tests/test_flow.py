@@ -483,3 +483,119 @@ def test_reverify_flow(client):
     got = client.get(f"/api/projects/{pid}/claims/{cid}", headers=A).json()
     assert got["freshness"] == "current" and "needs_reverification" not in got["details"] and got["details"]["reverified_by"] == gargi["user_id"]
     assert cid not in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
+
+
+def test_meeting_notes_participants_and_links(client):
+    admin, priya, gargi, yen, org, pid = setup_team(client)
+    notes = ("Meeting notes - payments sync\n"
+             "Attendees: Priya Sharma, Gargi Yadav\n"
+             "We decided to switch the payments-service cache to Redis because lookups are slow.\n"
+             "Action item: update the payments-service runbook assigned to @gargi\n"
+             "Who owns the invoice-worker retry policy?")
+    r = up(client, admin["token"], pid, "payments-sync-notes.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    cl = client.get(f"/api/projects/{pid}/claims", headers=H(admin["token"])).json()
+    cats = {(c["category"], c["statement"]) for c in cl}
+    assert any(c["category"] == "attendance" and "Gargi Yadav" in c["statement"] for c in cl)
+    assert any(c["category"] == "decision" and "Redis" in c["statement"] for c in cl)
+    assert any(c["category"] == "task" and "runbook" in c["statement"] for c in cl)
+    assert any(c["category"] == "question" for c in cl)
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(admin["token"])).json()
+    assert recs[0]["record_type"] == "meeting"
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(admin["token"])).json()
+    etypes = {e["relation"] for e in g["edges"]}
+    assert "attended" in etypes and "decided_in" in etypes and "action_from" in etypes and "raised_in" in etypes
+
+
+def test_sync_fail_closed_on_scopes(client, monkeypatch):
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord
+    from datetime import datetime
+
+    class Fake:
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {"scopes": ["read:repo"]}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("github", "c1", "commit", "x", "fix payments-service retry", "gargi", None, datetime(2026, 1, 2), source_ref),
+                    NormalizedRecord("github", "i1", "issue", "Bug: crash", "Bug: payments-service crash on retry", "gargi", None, datetime(2026, 1, 3), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "sc@x.io", "S")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
+                                                            "scopes": {"permissions": ["issues"]}}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "a/b"}, headers=H(t)).json()["id"]
+    client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t))
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(t)).json()
+    assert recs and all(r["record_type"] == "issue" for r in recs)
+    # unknown scope is rejected
+    assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
+                                                             "scopes": {"permissions": ["bogus"]}}, headers=H(t)).status_code == 422
+
+
+def test_gdrive_default_scope_and_meeting_decision_participants(client, monkeypatch):
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord
+    from datetime import datetime
+
+    class Fake:
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {"scopes": ["drive.readonly"]}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("google_drive", "d1", "document", "Doc", "payments-service uses postgres", "gargi", None, datetime(2026, 1, 2), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "gd@x.io", "G")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "google_drive", "token": "tok", "consent": True}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "f1"}, headers=H(t)).json()["id"]
+    client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t))
+    assert client.get(f"/api/projects/{pid}/records", headers=H(t)).json()
+
+    notes = ("Meeting notes - sync\nAttendees: Priya Sharma, Gargi Yadav\n"
+             "We decided to switch the payments-service cache to Redis because lookups are slow.")
+    r = up(client, t, pid, "notes.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    from app.db import SessionLocal
+    from app import models as m
+    db = SessionLocal()
+    dec = [d for d in db.query(m.Decision).filter_by(project_id=pid).all() if "Redis" in d.title][0]
+    assert set(dec.participants or []) >= {"Priya Sharma", "Gargi Yadav"}
+    db.close()
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(t)).json()
+    assert any(e["relation"] == "participated_in" for e in g["edges"])
+
+
+def test_connector_scope_mismatch_rejected(client):
+    a = register(client, "sc2@x.io", "S2")
+    org, t = a["org_id"], a["token"]
+    assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "slack", "token": "tok", "consent": True,
+                                                             "scopes": {"permissions": ["repo"]}}, headers=H(t)).status_code == 422
+
+
+def test_stronger_llm_support_meeting_and_database_detection(client, monkeypatch):
+    from app.services import llm
+    from app.services.rag import _supported
+    cites = [{"quote": "Redis was picked because refund lookups need fast reads"}]
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "entails", lambda a, b: None)
+    assert not _supported("Redis was picked because refund lookups need fast reads [1].", cites)  # unclear entailment now fails
+    monkeypatch.setattr(llm, "entails", lambda a, b: True)
+    assert _supported("Redis was picked because refund lookups need fast reads [1].", cites)
+    monkeypatch.setattr(llm, "available", lambda: False)
+    # without a model the lexical bar is higher: only 60% of the words are in the excerpt
+    assert not _supported("Redis was picked because refund lookups need extra caching layers today [1].", cites)
+
+    admin, priya, gargi, yen, org, pid = setup_team(client)
+    notes = ("Sprint planning notes\nPresent: Priya Sharma, Gargi Yadav\n"
+             "We decided to keep sessions in redis because it is fast.\nDATABASE_URL=postgres://db.internal/app\n")
+    r = up(client, admin["token"], pid, "planning.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    cl = client.get(f"/api/projects/{pid}/claims", headers=H(admin["token"])).json()
+    assert sum(1 for c in cl if c["category"] == "attendance") == 2  # "Present:" line works too
+    assert {c["subject_key"] for c in cl if c["category"] == "database"} >= {"database:redis", "database:postgres"}
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(admin["token"])).json()
+    assert recs[0]["record_type"] == "meeting"  # "Sprint planning" counts as a meeting
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(admin["token"])).json()
+    assert any(n["type"] == "database" for n in g["nodes"])
+    assert any(e["relation"] == "part_of" for e in g["edges"])

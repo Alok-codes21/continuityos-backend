@@ -81,13 +81,29 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
     meta = meta or {}
     items = []
     seen = set()
+    meeting_people = []
     ctx_comp = _title_component(title, content)
+    is_meeting = record_type == "meeting" or bool(re.search(
+        r"(?i)\b(attendees\s*:|participants\s*:|present\s*:|in attendance|meeting notes|minutes of|standup|stand-up|weekly sync|sprint planning|retrospective|retro\b|kickoff|1:1\b|call notes)",
+        (title or "") + "\n" + (content or "")[:1000]))
+
 
     def add(it):
         key = (it.category, it.subject_key, it.statement.lower())
         if key not in seen:
             seen.add(key)
             items.append(it)
+
+    if is_meeting:
+        people = list(meta.get("participants") or [])
+        for line in (content or "").splitlines():
+            am = re.search(r"(?i)\b(?:attendees|participants|present|in attendance)\s*[:\-]\s*(.+)", line)
+            if am:
+                people += re.split(r",| and ", am.group(1))
+        meeting_people = [p.strip().strip(".@") for p in dict.fromkeys(people) if p and 1 < len(p.strip().strip(".@")) <= 60]
+        for nm in meeting_people:
+            add(Item("attendance", f"attendance:{slug(title or 'meeting', 40)}:{person_key(nm)}",
+                     f"{nm} attended: {(title or 'meeting')[:80]}", {"person": nm}, "evidence_backed", nm))
 
     if record_type == "codeowners":
         for line in content.splitlines():
@@ -140,11 +156,12 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
                 by = dm.group(1)
             add(Item("decision", f"decision:{slug(stmt, 70)}", stmt,
                      {"alternatives": [alt.group(1).strip()] if alt else [], "rationale": why.group(1).strip().rstrip(".") if why else "",
-                      "supersedes": sup.group(1).strip().strip("\"'") if sup else "", "decided_by": by, "component": comp},
+                      "supersedes": sup.group(1).strip().strip("\"'") if sup else "", "decided_by": by, "component": comp,
+                      "participants": meeting_people},
                      "evidence_backed" if why else "inferred", s))
 
         # tasks
-        tm = re.search(r"(?i)(?:\bTODO\b[:\s]*|\btask\s*[:\-]\s*|^[-*]\s*\[( |x)\]\s*)(.+)", s)
+        tm = re.search(r"(?i)(?:\bTODO\b[:\s]*|\btask\s*[:\-]\s*|\baction item\s*[:\-]\s*|^[-*]\s*\[( |x)\]\s*)(.+)", s)
         if tm:
             title = tm.group(2).strip() if tm.lastindex and tm.lastindex >= 2 else s
             asg = re.search(r"(?i)(?:assigned to\s+@?|assignee[:\s]+@?|owner[:\s]+@?|@)([A-Za-z][\w.\-]+)", s)
@@ -158,7 +175,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
         if record_type == "issue" and not re.search(r"(?i)^(?:feature|enhancement)", title):
             pass
         bug_words = r"(?i)\b(bug|crash|regression|fails?|failure|broken" + (r"|incident|outage" if record_type == "issue" else "") + r")\b"
-        if re.search(bug_words, s) and record_type in ("issue", "pull_request", "document", "commit", "message"):
+        if re.search(bug_words, s) and record_type in ("issue", "pull_request", "document", "commit", "message", "meeting"):
             resolved = bool(re.search(r"(?i)\b(fix(?:ed|es)?|resolved|closes?|closed|patched)\b", s)) or meta.get("state") == "closed"
             add(Item("bug", f"bug:{slug(s, 70)}", s.rstrip("."), {"resolved": resolved, "component": comp, "assignees": meta.get("assignees", [])},
                      "evidence_backed", s))
@@ -200,8 +217,14 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
             add(Item("config_value", f"value:{base}:{concept}", f"{base}: {concept.replace('_', ' ')} = {val}",
                      {"concept": concept, "value": val, "component": base}, "evidence_backed", s))
 
+        dbm = re.search(r"(?i)\b(postgres(?:ql)?|mysql|mariadb|mongodb|mongo|redis|dynamodb|cassandra|sqlite|elasticsearch|clickhouse|supabase|firebase|neo4j)\b", s) or \
+            (re.search(r"\b(?:DATABASE_URL|DB_HOST|DB_NAME)\s*=", s) and re.search(r"(?i)\b(postgres(?:ql)?|mysql|mongodb|mongo|redis|sqlite)\b", s))
+        if dbm:
+            add(Item("database", f"database:{dbm.group(1).lower()}", f"{dbm.group(1)} is a database used by the project",
+                     {"database": dbm.group(1), "component": comp}, "evidence_backed", s))
+
         # questions
-        if s.endswith("?") and len(s) > 20 and record_type in ("document", "message", "issue"):
+        if s.endswith("?") and len(s) > 20 and record_type in ("document", "message", "issue", "meeting"):
             add(Item("question", f"question:{slug(s, 70)}", s, {}, "inferred", s))
 
     if record_type == "commit" and author:

@@ -90,7 +90,7 @@ def _side_tables(db, project, rec, item, claim):
         claims_engine.upsert_component(db, project.id, d["to"])
     if item.category == "decision" and not db.query(m.Decision).filter_by(project_id=project.id, claim_id=claim.id).first():
         people = []
-        for nm in [d.get("decided_by"), rec.author, *(getattr(rec, "_extra_people", None) or []), *re.findall(r"@([A-Za-z0-9_.-]{2,40})", f"{item.statement} {item.excerpt}")]:
+        for nm in [d.get("decided_by"), rec.author, *(d.get("participants") or []), *(getattr(rec, "_extra_people", None) or []), *re.findall(r"@([A-Za-z0-9_.-]{2,40})", f"{item.statement} {item.excerpt}")]:
             if nm and nm not in people:
                 people.append(nm)
         claim.details = {**claim.details, "participants": people}
