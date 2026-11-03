@@ -7,6 +7,7 @@ from sqlalchemy import (Boolean, DateTime, ForeignKey, Integer, String, Text,
                         UniqueConstraint, Index, JSON)
 from sqlalchemy.orm import Mapped, mapped_column
 
+from .crypto import EncryptedText
 from .db import Base
 
 
@@ -152,7 +153,7 @@ class SourceRecord(Base):
     external_id: Mapped[str] = mapped_column(String(300))
     record_type: Mapped[str] = mapped_column(String(40))  # commit | pull_request | issue | document | message
     title: Mapped[str] = mapped_column(String(500), default="")
-    content: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(EncryptedText)
     author: Mapped[str] = mapped_column(String(200), nullable=True)
     url: Mapped[str] = mapped_column(String(500), nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -184,7 +185,7 @@ class DocumentChunk(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     record_id: Mapped[str] = mapped_column(ForeignKey("source_records.id", ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
-    text: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(EncryptedText)
     embedding: Mapped[list] = mapped_column(JSON, default=list)
 
 
@@ -197,6 +198,7 @@ class PeopleKnowledge(Base):
     level: Mapped[str] = mapped_column(String(20), default="working")
     source: Mapped[str] = mapped_column(String(30), default="self_reported")
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    profile: Mapped[dict] = mapped_column(JSON, default=dict)  # prior systems, approaches, training needs, recommendations
 
 
 class Component(Base):
@@ -432,4 +434,16 @@ class AuditLog(Base):
     target_type: Mapped[str] = mapped_column(String(40), nullable=True)
     target_id: Mapped[str] = mapped_column(String(60), nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ContributorConsent(Base):
+    """Individual consent: an author who withdraws consent has their contributions excluded and removed."""
+    __tablename__ = "contributor_consents"
+    __table_args__ = (UniqueConstraint("project_id", "author"),)
+    id: Mapped[str] = col_id("ccn")
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    author: Mapped[str] = mapped_column(String(200))
+    granted: Mapped[bool] = mapped_column(Boolean, default=True)
+    decided_by: Mapped[str] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

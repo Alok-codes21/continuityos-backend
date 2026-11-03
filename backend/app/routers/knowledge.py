@@ -195,7 +195,9 @@ class AskIn(BaseModel):
 @router.post("/ask")
 def ask(body: AskIn, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     r = rag.ask(db, ctx.project, ctx.user, ctx.org_role, body.question)
-    audit(db, "ai_retrieval", ctx.user, ctx.org_id, ctx.pid, answered=r["answered"], citations=len(r["citations"]))
+    audit(db, "ai_retrieval", ctx.user, ctx.org_id, ctx.pid, answered=r["answered"], citations=len(r["citations"]),
+          record_ids=sorted({c["record_id"] for c in r["citations"] if c.get("record_id")}), claim_ids=sorted({c["claim_id"] for c in r["citations"] if c.get("claim_id")}))
+    ledger.append(db, ctx.pid, "ai_retrieval", "question", ctx.user.id, actor=ctx.user.id, new_state={"answered": r["answered"], "records": len(r["citations"])}, verification="verified")
     db.commit()
     return r
 

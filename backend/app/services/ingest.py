@@ -7,7 +7,7 @@ from .. import models as m
 from . import claims_engine, graph, ledger
 from .embed import embed
 from .extract import extract, person_key
-from .redact import looks_like_injection, redact
+from .redact import looks_like_injection, looks_confidential, redact
 
 
 def chunk_text(text, size=700):
@@ -97,14 +97,19 @@ def _side_tables(db, project, rec, item, claim):
                       status="done" if d.get("done") else "open", record_id=rec.id))
 
 
-def ingest_records(db, project, source, records, actor=None, selections=None, job=None):
+def ingest_records(db, project, source, records, actor=None, selections=None, job=None, allowed_types=None):
     job = job or m.SourceSyncJob(project_id=project.id, source_id=source.id if source else None)
     db.add(job)
     db.flush()
+    opted_out = {c.author.lower() for c in db.query(m.ContributorConsent).filter_by(project_id=project.id, granted=False)}
     for r in records:
         job.fetched += 1
         if not selection_allows(r, selections):
             continue
+        if allowed_types is not None and r.record_type not in allowed_types:
+            continue  # integration scope was not approved for this kind of record
+        if r.author and r.author.lower() in opted_out:
+            continue  # individual withdrew consent for their contributions
         clean, findings = redact(r.content)
         title, tfind = redact(r.title or "")
         injected = looks_like_injection(r.content) or looks_like_injection(r.title or "")
@@ -117,7 +122,7 @@ def ingest_records(db, project, source, records, actor=None, selections=None, jo
                              external_id=r.external_id, record_type=r.record_type, title=title[:500], content=clean, author=r.author,
                              url=r.url, occurred_at=r.occurred_at or m.now(), content_hash=h, redactions=len(findings) + len(tfind),
                              injection_suspected=injected, version=(prev.version + 1) if prev else 1,
-                             visibility=(r.meta or {}).get("visibility", "project"),
+                             visibility="restricted" if (looks_confidential(clean) or (r.meta or {}).get("visibility") == "restricted") else "project",
                              processing_status="flagged" if injected else "processed")
         db.add(rec)
         db.flush()

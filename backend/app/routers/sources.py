@@ -35,6 +35,10 @@ def _org(org_id, db, user, min_role):
         raise HTTPException(403, f"Requires {min_role} role")
 
 
+SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
+               "documents": ("document",), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
+
+
 class ConnectIn(BaseModel):
     connector: str
     token: str = Field(default="", max_length=500)
@@ -195,7 +199,11 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
         job.status, job.error = "failed", str(e)[:500]
         db.commit()
         raise HTTPException(502, "Source fetch failed")
-    ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job)
+    scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
+    allowed = None
+    if scopes:
+        allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
+    ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]
     s.last_cursor = datetime.utcnow().isoformat()
@@ -316,3 +324,34 @@ def delete_source_records(source_id: str, ctx=Depends(need("manager")), db: Sess
     audit(db, "source_records_deleted", ctx.user, ctx.org_id, ctx.pid, "source", s.id, records=len(recs))
     db.commit()
     return {"ok": True, "records_deleted": len(recs), "claims_removed": removed}
+
+
+@router.get("/projects/{project_id}/consents")
+def consents(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    return [{"author": c.author, "granted": c.granted} for c in db.query(m.ContributorConsent).filter_by(project_id=ctx.pid)]
+
+
+@router.put("/projects/{project_id}/consents")
+def set_consent(body: dict, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    """Record an individual's consent decision. Withdrawing removes their already-ingested contributions."""
+    author = str(body.get("author", "")).strip()[:200]
+    if not author:
+        raise HTTPException(422, "author required")
+    granted = bool(body.get("granted", False))
+    c = db.query(m.ContributorConsent).filter_by(project_id=ctx.pid, author=author).first()
+    if not c:
+        c = m.ContributorConsent(project_id=ctx.pid, author=author)
+        db.add(c)
+    c.granted, c.decided_by = granted, ctx.user.id
+    removed = 0
+    if not granted:
+        for r in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == ctx.pid).all():
+            if (r.author or "").lower() == author.lower():
+                _purge(db, ctx, r)
+                removed += 1
+        claims_engine.reconcile(db, ctx.pid)
+        graph.rebuild_graph(db, ctx.pid)
+    ledger.append(db, ctx.pid, "consent_changed", "person", author, actor=ctx.user.id, new_state={"granted": granted, "records_removed": removed}, verification="verified")
+    audit(db, "consent_changed", ctx.user, ctx.org_id, ctx.pid, "person", author, granted=granted)
+    db.commit()
+    return {"author": author, "granted": granted, "records_removed": removed}

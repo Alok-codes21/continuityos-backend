@@ -49,3 +49,16 @@ def redact(text: str, redact_pii: bool = True):
 
 def looks_like_injection(text: str) -> bool:
     return any(p.search(text) for p in INJECTION_PATTERNS)
+
+
+CONFIDENTIAL_PATTERNS = [
+    re.compile(r"(?i)\b(?:strictly\s+)?confidential\b"),
+    re.compile(r"(?i)\binternal[- ]only\b|\bdo not (?:share|distribute|forward)\b|\bunder (?:an? )?nda\b"),
+    re.compile(r"(?i)\b(?:salary|salaries|compensation|payroll|equity grant|term sheet|acquisition|layoffs?)\b"),
+    re.compile(r"(?i)\b(?:customer list|pricing sheet|revenue forecast|board minutes)\b"),
+]
+
+
+def looks_confidential(text: str) -> bool:
+    """Business-sensitive wording: such records are stored as restricted (managers and admins only)."""
+    return any(p.search(text or "") for p in CONFIDENTIAL_PATTERNS)
