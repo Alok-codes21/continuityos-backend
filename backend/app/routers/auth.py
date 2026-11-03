@@ -191,3 +191,21 @@ def add_project_member(body: dict, ctx=Depends(need("manager")), db: Session = D
     audit(db, "project_member_added", ctx.user, ctx.org_id, ctx.pid, "user", uid_)
     db.commit()
     return {"ok": True}
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=10, max_length=200)
+
+
+@router.post('/auth/change-password')
+def change_password(body: PasswordChangeIn, db: Session = Depends(get_db), user: m.User = Depends(current_user)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(403, 'Current password is incorrect')
+    if body.new_password == body.current_password:
+        raise HTTPException(422, 'New password must differ from the current password')
+    user.password_hash = hash_password(body.new_password)
+    user.sessions_revoked_at = m.now()
+    audit(db, 'password_changed', user)
+    db.commit()
+    return {'ok': True, 'message': 'Password changed. Sign in again.'}

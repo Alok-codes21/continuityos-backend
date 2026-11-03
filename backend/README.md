@@ -69,3 +69,34 @@ before fetch/ingestion but does not reproduce every provider ACL inside the app.
 Incoming users may now submit their own skill/profile records and view their
 own pending records; a different manager must approve them. This does not grant
 incoming users access to source administration or other contributors' drafts.
+
+## Detailed audit: ingestion and account limits
+
+Session revocation uses sub-second issue/cutoff timestamps. Users can change
+passwords with `POST /api/auth/change-password`; this revokes existing sessions.
+Temporary-password replacement is available but not yet enforced at first login.
+Membership is admin-provisioned, not an email invitation/acceptance workflow.
+Failed-login throttling remains process-local; multi-worker deployments need a
+shared throttle. Last-admin concurrent demotion protection is not yet guaranteed.
+
+Slack history/thread and Drive folder caps save provider continuation cursors;
+repeat sync to continue. A failed fetch does not commit a new cursor. The cursor
+is continuation state, not a background sync schedule. Capped GitHub snapshots
+and skipped selected binary/oversized files report incomplete coverage. When
+code/docs snapshots are selected, CODEOWNERS uses the same pinned commit SHA.
+File selection dates refer to the repository snapshot commit, not each file's
+last modification. Included selections use OR semantics; excluded rows are not
+negative rules overriding other included rows. Bounded dates exclude undated
+records, and timezone-qualified bounds are normalized to UTC.
+
+Consent currently uses exact provider author identifiers, not a verified global
+person mapping. Configure each source identity separately. An author's display
+name change or alias is not automatically resolved for consent. Uploaded document
+records retain the documented opt-in exception; code snapshots do not.
+
+Request bodies are bounded to 12 MB before multipart parsing; uploaded files
+remain capped at 10 MB. PDFs are limited to 300 pages and two million extracted
+characters and are closed after extraction. Set upload form `record_type` to
+`meeting` or `document` to override heuristic classification (`auto` is default).
+Existing PostgreSQL deployments must widen sources.last_cursor to TEXT before
+using long continuation state; create_all does not migrate existing columns.

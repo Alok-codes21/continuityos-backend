@@ -2,6 +2,7 @@
 -> injection flag -> extract -> provenance -> embed -> claims/ledger -> graph."""
 import hashlib
 import re
+from datetime import timezone
 
 from .. import models as m
 from . import claims_engine, graph, ledger
@@ -47,7 +48,12 @@ def selection_allows(rec, selections):
     for s in selections:
         if not s.included:
             continue
-        if rec.occurred_at and ((s.date_from and rec.occurred_at < s.date_from) or (s.date_to and rec.occurred_at > s.date_to)):
+        def utc(value):
+            return value.astimezone(timezone.utc).replace(tzinfo=None) if value and value.tzinfo else value
+        when, start, end = utc(rec.occurred_at), utc(s.date_from), utc(s.date_to)
+        if (start or end) and not when:
+            continue
+        if when and ((start and when < start) or (end and when > end)):
             continue
         if s.content_types and rec.record_type not in s.content_types:
             continue

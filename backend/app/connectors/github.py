@@ -58,7 +58,7 @@ class GitHubConnector(SourceConnector):
         return {"login": u.get("login"), "scopes": ["read:repo"]}
 
     def get_available_sources(self):
-        repos = self._get("/user/repos", {"per_page": 50, "sort": "updated"})
+        repos = self._paged("/user/repos", {"sort": "updated"})
         return [{"source_ref": r["full_name"], "name": r["full_name"], "private": r.get("private", False)} for r in repos]
 
     def _paged(self, path, params):
@@ -98,18 +98,20 @@ class GitHubConnector(SourceConnector):
                 if kind == "issue" and "pull_request" in it:
                     continue
                 recs.append(self.normalize_record({"_k": kind, **it}, source_ref))
+        snapshot_ref = None
+        if self.file_paths and (self.allowed_types is None or {"document", "code_file"} & self.allowed_types):
+            recs.extend(self._fetch_files(source_ref))
+            snapshot_ref = getattr(self, "snapshot_ref", None)
         for path in (("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
                      if self.allowed_types is None or "codeowners" in self.allowed_types else ()):
             try:
-                f = self._get(f"/repos/{source_ref}/contents/{path}")
+                f = self._get(f"/repos/{source_ref}/contents/{path}", {"ref": snapshot_ref} if snapshot_ref else None)
                 text = base64.b64decode(f["content"]).decode("utf-8", "replace")
                 recs.append(NormalizedRecord("github", f"{source_ref}:{path}", "codeowners", f"{path} ({source_ref})", text,
                                              None, f.get("html_url"), None, source_ref))
                 break
             except ConnectorError:
                 continue
-        if self.file_paths and (self.allowed_types is None or {"document", "code_file"} & self.allowed_types):
-            recs.extend(self._fetch_files(source_ref))
         recs = [r for r in recs if not until or not r.occurred_at or r.occurred_at <= until]
         return recs
 
@@ -131,6 +133,7 @@ class GitHubConnector(SourceConnector):
             branch = quote(repo.get("default_branch") or "main", safe="")
             head = self._get(f"/repos/{source_ref}/commits/{branch}")
             ref = head["sha"]
+            self.snapshot_ref = ref
             tree_sha = head["commit"]["tree"]["sha"]
             tree = self._get(f"/repos/{source_ref}/git/trees/{tree_sha}", {"recursive": "1"})
             if tree.get("truncated"):
@@ -147,6 +150,7 @@ class GitHubConnector(SourceConnector):
                 if not kind or (self.allowed_types is not None and kind not in self.allowed_types):
                     continue
                 if ent.get("size", 0) > self.max_file_bytes:
+                    self.truncated = True
                     self.warnings.append(f"Skipped oversized file: {path}")
                     continue
                 if len(items) >= self.max_files or total + ent.get("size", 0) > self.max_total_bytes:
@@ -155,15 +159,18 @@ class GitHubConnector(SourceConnector):
                     break
                 data = self._get(f"/repos/{source_ref}/contents/{quote(path, safe='/')}", {"ref": ref})
                 if data.get("encoding") != "base64" or data.get("type") != "file":
+                    self.truncated = True
                     self.warnings.append(f"Skipped unsupported file response: {path}")
                     continue
                 raw = base64.b64decode(data.get("content", ""))
                 if len(raw) > self.max_file_bytes or total + len(raw) > self.max_total_bytes or b"\x00" in raw:
+                    self.truncated = True
                     self.warnings.append(f"Skipped oversized or binary file: {path}")
                     continue
                 try:
                     text = raw.decode("utf-8")
                 except UnicodeError:
+                    self.truncated = True
                     self.warnings.append(f"Skipped non-UTF-8 file: {path}")
                     continue
                 total += len(raw)

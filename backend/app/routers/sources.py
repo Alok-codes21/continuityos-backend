@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -188,6 +188,12 @@ class SelectionIn(BaseModel):
 
 @router.put("/projects/{project_id}/sources/{source_id}/selection")
 def set_selection(source_id: str, body: SelectionIn, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    for field in ("date_from", "date_to"):
+        dt = getattr(body, field)
+        if dt and dt.tzinfo:
+            setattr(body, field, dt.astimezone(timezone.utc).replace(tzinfo=None))
+    if body.date_from and body.date_to and body.date_from > body.date_to:
+        raise HTTPException(422, "date_from must not be after date_to")
     s = _source(db, ctx, source_id)
     sel = db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id).first()
     if not sel:
@@ -237,7 +243,9 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]
-    if not getattr(conn, "truncated", False):  # a capped fetch must not move the cursor, or the rest would be skipped forever
+    if hasattr(conn, "next_cursor"):
+        s.last_cursor = conn.next_cursor
+    elif not getattr(conn, "truncated", False):  # a capped fetch must not move the cursor, or the rest would be skipped forever
         s.last_cursor = datetime.utcnow().isoformat()
     audit(db, "source_synced", ctx.user, ctx.org_id, ctx.pid, "source", s.id, stored=job.stored)
     db.commit()
@@ -250,8 +258,10 @@ def jobs(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/uploads", status_code=201)
-async def upload(file: UploadFile = File(...), visibility: str = Form("project"), author: str = Form(""),
+async def upload(file: UploadFile = File(...), visibility: str = Form("project"), author: str = Form(""), record_type: str = Form("auto"),
                  ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+    if record_type not in ("auto", "document", "meeting"):
+        raise HTTPException(422, "Record type must be auto, document or meeting")
     name = safe_name(file.filename)
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXT:
@@ -280,6 +290,8 @@ async def upload(file: UploadFile = File(...), visibility: str = Form("project")
         db.add(src)
         db.flush()
     rec = ManualUploadConnector().normalize_record({"filename": name, "text": text, "author": author or None, "occurred_at": m.now()})
+    if record_type != "auto":
+        rec.record_type = record_type
     rec.meta = {"visibility": visibility}
     job = ingest.ingest_records(db, ctx.project, src, [rec], actor=ctx.user)
     srec = db.query(m.SourceRecord).filter_by(project_id=ctx.pid, source_id=src.id, external_id=name).order_by(m.SourceRecord.version.desc()).first()

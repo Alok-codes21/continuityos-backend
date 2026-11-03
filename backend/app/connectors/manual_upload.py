@@ -18,10 +18,21 @@ def extract_text(filename: str, data: bytes) -> str:
     if ext == ".pdf":
         import fitz  # PyMuPDF
         try:
-            doc = fitz.open(stream=data, filetype="pdf")
+            with fitz.open(stream=data, filetype="pdf") as doc:
+                if len(doc) > 300:
+                    raise ConnectorError("PDF exceeds the 300-page limit")
+                parts, total = [], 0
+                for i, page in enumerate(doc):
+                    part = f"[page {i + 1}] " + page.get_text()
+                    total += len(part)
+                    if total > 2_000_000:
+                        raise ConnectorError("PDF exceeds the extracted-text limit")
+                    parts.append(part)
+                return "\n".join(parts)
+        except ConnectorError:
+            raise
         except Exception:
             raise ConnectorError("Could not read PDF")
-        return "\n".join(f"[page {i + 1}] " + p.get_text() for i, p in enumerate(doc))
     if ext == ".docx":
         import docx
         try:

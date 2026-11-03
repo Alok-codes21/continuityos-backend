@@ -123,7 +123,7 @@ class Source(Base):
     source_type: Mapped[str] = mapped_column(String(40))
     external_id: Mapped[str] = mapped_column(String(300))
     name: Mapped[str] = mapped_column(String(300))
-    last_cursor: Mapped[str] = mapped_column(String(300), nullable=True)
+    last_cursor: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
