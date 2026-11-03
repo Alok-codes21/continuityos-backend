@@ -1,4 +1,6 @@
 """Knowledge graph persisted in DB tables (graph_nodes / dependencies). NetworkX is used only to traverse a copy."""
+import re
+
 import networkx as nx
 
 from .. import models as m
@@ -79,6 +81,8 @@ def rebuild_graph(db, pid):
     for c in db.query(m.Component).filter_by(project_id=pid).all():
         ensure_node(db, pid, "service" if c.kind != "module" else "module", c.key, c.name, {"kind": c.kind})
     edges = set()
+    proj = db.get(m.Project, pid)
+    pn = ensure_node(db, pid, "project", pid, proj.name if proj else "Project")
 
     def edge(src, dst, rel, ver, claim=None, rec=None):
         k = (src.id, dst.id, rel)
@@ -168,6 +172,11 @@ def rebuild_graph(db, pid):
             rn = ensure_node(db, pid, "risk", c.subject_key, c.statement[:80])
             if cn:
                 edge(rn, cn, "affects", _vmap(c.status), c)
+        if cn:
+            edge(cn, pn, "part_of", "evidence_backed", c)
+        dbm = re.search(r"(?i)\b(postgres(?:ql)?|mysql|mariadb|mongodb|mongo|redis|dynamodb|cassandra|sqlite|elasticsearch)\b", c.statement)
+        if dbm and cn:
+            edge(cn, ensure_node(db, pid, "database", dbm.group(1).lower(), dbm.group(1)), "stores_in", _vmap(c.status), c)
         for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).all():
             rec = db.get(m.SourceRecord, ev.record_id) if ev.record_id else None
             if not rec:

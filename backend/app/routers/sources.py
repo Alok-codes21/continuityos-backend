@@ -36,7 +36,8 @@ def _org(org_id, db, user, min_role):
 
 
 SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
-               "documents": ("document",), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
+               "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
+CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "gdrive": ["documents"], "manual_upload": ["documents"]}
 
 
 class ConnectIn(BaseModel):
@@ -76,8 +77,12 @@ def connect(org_id: str, body: ConnectIn, db: Session = Depends(get_db), user: m
     db.add(integ)
     db.flush()
     db.add(m.ConsentRecord(org_id=org_id, integration_id=integ.id, user_id=user.id, kind="connect", granted=True))
-    for s in (body.scopes.get("permissions") or []) if isinstance(body.scopes, dict) else []:
-        db.add(m.IntegrationPermission(integration_id=integ.id, scope=str(s)[:100], approved=True))
+    req_scopes = (body.scopes.get("permissions") or []) if isinstance(body.scopes, dict) else []
+    unknown = [sc for sc in req_scopes if sc not in SCOPE_TYPES]
+    if unknown:
+        raise HTTPException(422, f"Unknown scopes: {', '.join(unknown)}")
+    for s in req_scopes or CONNECTOR_DEFAULT_SCOPES.get(body.connector, []):
+        db.add(m.IntegrationPermission(integration_id=integ.id, scope=s, approved=True))
     audit(db, "integration_connected", user, org_id, target_type="integration", target_id=integ.id, connector=body.connector)
     db.commit()
     return {"id": integ.id, "connector": integ.connector, "status": integ.status}
@@ -200,9 +205,8 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
         db.commit()
         raise HTTPException(502, "Source fetch failed")
     scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
-    allowed = None
-    if scopes:
-        allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
+    # fail closed: no approved scope means ingest nothing, not everything
+    allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]

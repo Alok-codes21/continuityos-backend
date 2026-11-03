@@ -505,3 +505,29 @@ def test_meeting_notes_participants_and_links(client):
     g = client.get(f"/api/projects/{pid}/graph", headers=H(admin["token"])).json()
     etypes = {e["relation"] for e in g["edges"]}
     assert "attended" in etypes and "decided_in" in etypes and "action_from" in etypes and "raised_in" in etypes
+
+
+def test_sync_fail_closed_on_scopes(client, monkeypatch):
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord
+    from datetime import datetime
+
+    class Fake:
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {"scopes": ["read:repo"]}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("github", "c1", "commit", "x", "fix payments-service retry", "gargi", None, datetime(2026, 1, 2), source_ref),
+                    NormalizedRecord("github", "i1", "issue", "Bug: crash", "Bug: payments-service crash on retry", "gargi", None, datetime(2026, 1, 3), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "sc@x.io", "S")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
+                                                            "scopes": {"permissions": ["issues"]}}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "a/b"}, headers=H(t)).json()["id"]
+    client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t))
+    recs = client.get(f"/api/projects/{pid}/records", headers=H(t)).json()
+    assert recs and all(r["record_type"] == "issue" for r in recs)
+    # unknown scope is rejected
+    assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
+                                                             "scopes": {"permissions": ["bogus"]}}, headers=H(t)).status_code == 422
