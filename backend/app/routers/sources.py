@@ -39,7 +39,7 @@ SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issu
                "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
 CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "google_drive": ["documents"], "manual_upload": ["documents"]}
 # which scopes each connector may hold; anything else is rejected
-CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners"},
+CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners", "documents"},
                     "slack": {"messages"}, "google_drive": {"documents"}, "manual_upload": {"documents"}}
 
 
@@ -115,6 +115,7 @@ class SourceIn(BaseModel):
     integration_id: str
     source_ref: str = Field(max_length=300)
     name: str = Field(default="", max_length=300)
+    file_paths: list[str] = Field(default_factory=list, max_length=40)
 
 
 def _source(db, ctx, sid):
@@ -129,6 +130,7 @@ def sources(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     out = []
     for s in db.query(m.Source).filter_by(project_id=ctx.pid):
         out.append({"id": s.id, "type": s.source_type, "ref": s.external_id, "name": s.name, "integration_id": s.integration_id,
+                    "file_paths": ((db.get(m.Integration, s.integration_id).scopes or {}).get("selected_files", {}).get(s.external_id, []) if s.integration_id and db.get(m.Integration, s.integration_id) else []),
                     "records": db.query(m.SourceRecord).filter_by(source_id=s.id).count(),
                     "selections": [{"id": x.id, "included": x.included, "date_from": x.date_from, "date_to": x.date_to, "content_types": x.content_types}
                                    for x in db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id)]})
@@ -157,12 +159,27 @@ def add_source(body: SourceIn, ctx=Depends(need("manager")), db: Session = Depen
     db.add(s)
     db.flush()
     db.add(m.SourceSelection(integration_id=i.id, project_id=ctx.pid, source_ref=body.source_ref, included=True, content_types=[]))
+    _save_file_paths(i, body.source_ref, body.file_paths)
     audit(db, "source_added", ctx.user, ctx.org_id, ctx.pid, "source", s.id)
     db.commit()
     return {"id": s.id}
 
 
+def _save_file_paths(integration, source_ref, paths):
+    if paths is None:
+        return
+    if paths and integration.connector != "github":
+        raise HTTPException(422, "File paths are supported only for GitHub")
+    if any(not p or len(p) > 250 or p.startswith("/") or ".." in p.split("/") or "\\" in p for p in paths):
+        raise HTTPException(422, "File paths must be relative repository paths or glob patterns")
+    data = dict(integration.scopes or {})
+    selected = dict(data.get("selected_files") or {})
+    selected[source_ref] = list(dict.fromkeys(paths))
+    integration.scopes = {**data, "selected_files": selected}
+
+
 class SelectionIn(BaseModel):
+    file_paths: list[str] | None = Field(default=None, max_length=40)
     included: bool = True
     date_from: datetime | None = None
     date_to: datetime | None = None
@@ -176,6 +193,7 @@ def set_selection(source_id: str, body: SelectionIn, ctx=Depends(need("manager")
     if not sel:
         sel = m.SourceSelection(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id)
         db.add(sel)
+    _save_file_paths(db.get(m.Integration, s.integration_id), s.external_id, body.file_paths)
     sel.included, sel.date_from, sel.date_to, sel.content_types = body.included, body.date_from, body.date_to, body.content_types
     db.flush()
     ledger.append(db, ctx.pid, "scope_changed", "selection", sel.id, actor=ctx.user.id, new_state={"included": sel.included}, verification="verified")
@@ -199,8 +217,14 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
     db.add(job)
     db.flush()
     sels = db.query(m.SourceSelection).filter_by(integration_id=i.id, project_id=ctx.pid, source_ref=s.external_id).all()
+    scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
+    # fail closed: no approved scope means ingest nothing, not everything
+    allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
     try:
         conn = catalog.get_connector(i.connector, decrypt_token(i.encrypted_token))
+        if i.connector == "github":
+            conn.allowed_types = allowed & set().union(*(set(sel.content_types) if sel.content_types else allowed for sel in sels if sel.included)) if sels else allowed
+            conn.file_paths = (i.scopes or {}).get("selected_files", {}).get(s.external_id, [])
         records = conn.fetch_records(s.external_id, cursor=s.last_cursor)
     except ConnectorRateLimited as e:
         job.status, job.error = "rate_limited", str(e)
@@ -210,9 +234,6 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
         job.status, job.error = "failed", str(e)[:500]
         db.commit()
         raise HTTPException(502, "Source fetch failed")
-    scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
-    # fail closed: no approved scope means ingest nothing, not everything
-    allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]

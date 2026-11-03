@@ -23,3 +23,21 @@ original text. The backend does not translate these fields, and it does not
 reject non-English user input. A source excerpt can therefore contain another
 language. Generated output from an external model is not a guaranteed language
 filter.
+
+## Selected GitHub documentation
+
+Create a GitHub integration with `scopes.permissions` including `documents`
+(and `repo` as well if commit/PR/issue ingestion is wanted). On source creation
+or the source selection PUT endpoint, set `file_paths`, for example
+`["README.md", "docs/*.md"]`. No documentation files are fetched by default.
+Selected supported files are README or docs/ text files with .md, .rst or .txt
+extensions. Paths are case-sensitive glob patterns relative to the repository.
+The source GET response reports the saved selection. Existing integrations need
+an explicitly approved documents scope; legacy repo scope is not expanded.
+
+Each sync pins the default branch commit before fetching file contents. Limits:
+40 selected files, 200 KB per file and 2 MB total per sync. Symlinks, submodules,
+binary/non-UTF-8 files and unsupported types are excluded. Partial fetches report
+warnings; truncated fetches do not advance the sync cursor. Files use the normal
+redaction, permission, extraction, deduplication, version and citation pipeline.
+These are current file snapshots, not per-file change history or deletion tracking.
