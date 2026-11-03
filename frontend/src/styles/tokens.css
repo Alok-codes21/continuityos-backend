@@ -1,0 +1,163 @@
+/* ============================================================
+   ContinuityOS Design Tokens
+   All CSS custom properties for the design system
+   ============================================================ */
+
+:root {
+  /* ── Sidebar ─────────────────────────────────────────────── */
+  --sidebar-bg: #1e1b2e;
+  --sidebar-text: #c8c4d8;
+  --sidebar-active-bg: rgba(139, 92, 246, 0.18);
+  --sidebar-active-text: #a78bfa;
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.06);
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+  --sidebar-section-label: rgba(200, 196, 216, 0.45);
+  --sidebar-icon-color: rgba(200, 196, 216, 0.65);
+
+  /* ── Surface / Layout ────────────────────────────────────── */
+  --main-bg: #f7f6f2;
+  --card-bg: #ffffff;
+  --card-border: #e8e6e0;
+  --card-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --topbar-bg: #ffffff;
+  --topbar-border: #ece9e2;
+
+  /* ── Brand / Primary ─────────────────────────────────────── */
+  --primary: #7c3aed;
+  --primary-light: #8b5cf6;
+  --primary-lighter: #ede9fe;
+  --primary-dark: #6d28d9;
+  --secondary: #4f46e5;
+  --secondary-light: #e0e7ff;
+
+  /* ── Teal / Accent ───────────────────────────────────────── */
+  --teal: #0d9488;
+  --teal-light: #ccfbf1;
+  --teal-dark: #0f766e;
+
+  /* ── Semantic States ─────────────────────────────────────── */
+  --success: #16a34a;
+  --success-light: #dcfce7;
+  --success-dark: #15803d;
+
+  --warning: #d97706;
+  --warning-light: #fef3c7;
+  --warning-dark: #b45309;
+
+  --danger: #dc2626;
+  --danger-light: #fee2e2;
+  --danger-dark: #b91c1c;
+
+  --info: #0284c7;
+  --info-light: #e0f2fe;
+
+  /* ── Typography ──────────────────────────────────────────── */
+  --text-primary: #1a1625;
+  --text-secondary: #6b6780;
+  --text-muted: #9ca3af;
+  --text-inverse: #ffffff;
+
+  /* ── Borders ─────────────────────────────────────────────── */
+  --border: #e5e3dc;
+  --border-light: #f0ede8;
+  --border-strong: #d1cec7;
+
+  /* ── Border Radii ────────────────────────────────────────── */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* ── Layout Dimensions ───────────────────────────────────── */
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 56px;
+  --topbar-height: 56px;
+
+  /* ── Typography / Fonts ──────────────────────────────────── */
+  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Manrope', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+  /* ── Font Sizes ──────────────────────────────────────────── */
+  --text-xs: 0.6875rem;   /* 11px */
+  --text-sm: 0.75rem;     /* 12px */
+  --text-base: 0.8125rem; /* 13px */
+  --text-md: 0.875rem;    /* 14px */
+  --text-lg: 1rem;        /* 16px */
+  --text-xl: 1.125rem;    /* 18px */
+  --text-2xl: 1.25rem;    /* 20px */
+  --text-3xl: 1.5rem;     /* 24px */
+
+  /* ── Spacing ─────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Z-index ─────────────────────────────────────────────── */
+  --z-sidebar: 100;
+  --z-topbar: 90;
+  --z-dropdown: 200;
+  --z-modal: 300;
+  --z-overlay: 290;
+  --z-toast: 400;
+
+  /* ── Transitions ─────────────────────────────────────────── */
+  --transition-fast: 0.12s ease;
+  --transition: 0.2s ease;
+  --transition-slow: 0.3s ease;
+
+  /* ── Shadows ─────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow: 0 1px 4px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.18);
+
+  /* ── Knowledge Status Badge Colours ─────────────────────── */
+
+  /* verified — teal green */
+  --badge-verified-bg: #ccfbf1;
+  --badge-verified-text: #0f766e;
+  --badge-verified-border: #99f6e4;
+  --badge-verified-dot: #0d9488;
+
+  /* evidence-backed — blue */
+  --badge-evidence-bg: #dbeafe;
+  --badge-evidence-text: #1d4ed8;
+  --badge-evidence-border: #bfdbfe;
+  --badge-evidence-dot: #3b82f6;
+
+  /* inferred — amber/yellow */
+  --badge-inferred-bg: #fef3c7;
+  --badge-inferred-text: #92400e;
+  --badge-inferred-border: #fde68a;
+  --badge-inferred-dot: #d97706;
+
+  /* conflicting — red-orange */
+  --badge-conflicting-bg: #fee2e2;
+  --badge-conflicting-text: #991b1b;
+  --badge-conflicting-border: #fecaca;
+  --badge-conflicting-dot: #dc2626;
+
+  /* missing — purple */
+  --badge-missing-bg: #ede9fe;
+  --badge-missing-text: #5b21b6;
+  --badge-missing-border: #ddd6fe;
+  --badge-missing-dot: #7c3aed;
+
+  /* outdated — grey */
+  --badge-outdated-bg: #f3f4f6;
+  --badge-outdated-text: #4b5563;
+  --badge-outdated-border: #e5e7eb;
+  --badge-outdated-dot: #9ca3af;
+}
