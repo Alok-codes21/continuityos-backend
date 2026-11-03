@@ -102,6 +102,24 @@ def reconcile(db, project_id, now_=None):
                 c.status = "outdated"
         c.updated_at = now_
 
+    # 5. source still current? A newer version of the same source record that no longer contains the quoted text
+    for c in claims:
+        if c.status in ("superseded",) or c.created_by.startswith("system:missing") or c.details.get("draft"):
+            continue
+        for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).all():
+            rec = db.get(m.SourceRecord, ev.record_id) if ev.record_id else None
+            if not rec or not ev.excerpt:
+                continue
+            newest = (db.query(m.SourceRecord).filter_by(project_id=project_id, source_type=rec.source_type, external_id=rec.external_id)
+                      .order_by(m.SourceRecord.version.desc()).first())
+            if newest and newest.version > rec.version and ev.excerpt not in (newest.content or ""):
+                if c.status == "verified":
+                    c.details = {**c.details, "needs_reverification": True, "source_changed": True}
+                    c.freshness = "stale"
+                elif c.status in ("evidence_backed", "inferred"):
+                    c.status, c.freshness = "outdated", "stale"
+                    c.details = {**c.details, "source_changed": True}
+                break
     db.flush()
     return rebuild_gaps(db, project_id)
 

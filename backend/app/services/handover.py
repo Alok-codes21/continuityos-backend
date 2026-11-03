@@ -62,7 +62,7 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
         elif c.category == "api" and comp in comps:
             add("systems", c.statement, "API endpoint.", c)
         elif c.category == "decision" and (comp in comps or graph.norm_person(d.get("decided_by")) == p.key):
-            add("decisions", c.statement, f"Reasoning: {d.get('rationale') or 'not recorded yet'}. Alternatives: {', '.join(d.get('alternatives') or []) or 'none recorded'}.", c)
+            add("decisions", c.statement, f"Reasoning: {d.get('rationale') or 'not recorded yet'}. Alternatives: {', '.join(d.get('alternatives') or []) or 'none recorded'}. Participants: {', '.join(d.get('participants') or []) or 'not recorded'}. Still valid: {'no, superseded' if c.status == 'superseded' else 'yes' if c.status != 'outdated' else 'unclear, source is outdated'}.", c)
         elif c.category == "rationale" and c.status != "missing":
             add("decisions", f"Reasoning for {c.subject_key.split(':', 1)[1][:60]}", c.statement, c)
         elif c.category == "procedure" and c.status != "missing" and d.get("component") in comps:

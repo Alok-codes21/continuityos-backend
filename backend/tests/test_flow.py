@@ -426,3 +426,42 @@ def test_adaptive_followups_are_contextual():
     fq = interview._followup(FakeDB(), S(id="i1"), q, "Priya owns it")
     assert fq is not None and "backup" in fq.question.lower()
     assert interview._followup(FakeDB(), S(id="i1"), q, "Priya owns it, Gargi is the backup") is None
+
+
+def test_opt_in_mode_graph_repo_nodes_and_source_changed(client, monkeypatch):
+    from datetime import datetime
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord, SourceConnector
+    from app.services.rag import _supported
+
+    state = {"n": 0}
+
+    class Fake(SourceConnector):
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            state["n"] += 1
+            body = "Decision: use Redis for the payments-service cache @gargi" if state["n"] == 1 else "Everything about caching was removed from this doc."
+            return [NormalizedRecord("github", "pr1", "pull_request", "PR 1", body, "priyasharma", None, datetime(2026, 1, 2), source_ref),
+                    NormalizedRecord("github", "c9", "commit", "x", "fix payments-service retry", "gargi", None, datetime(2026, 1, 3), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "f@x.io", "F")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "a/b"}, headers=H(t)).json()["id"]
+    assert client.put(f"/api/projects/{pid}/consent-mode", json={"mode": "bogus"}, headers=H(t)).status_code == 422
+    client.put(f"/api/projects/{pid}/consent-mode", json={"mode": "opt_in"}, headers=H(t))
+    client.put(f"/api/projects/{pid}/consents", json={"author": "gargi", "granted": True}, headers=H(t))
+    assert client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t)).json()["stored"] == 1  # only gargi said yes
+    client.put(f"/api/projects/{pid}/consents", json={"author": "priyasharma", "granted": True}, headers=H(t))
+    j = client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t)).json()
+    assert j["stored"] == 1 and j["duplicates"] == 1  # priya now consented; PR text changed so it is a new version
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(t)).json()
+    assert "repository" in {n["type"] for n in g["nodes"]}
+    cl = client.get(f"/api/projects/{pid}/claims", headers=H(t)).json()
+    assert any(c["status"] == "outdated" for c in cl)  # the quoted text is gone from the newer source version
+    # LLM answers must be supported sentence by sentence
+    cites = [{"quote": "Redis was picked because refund lookups need fast reads"}]
+    assert _supported("Redis was picked because refund lookups need fast reads [1].", cites)
+    assert not _supported("Redis was picked and it handles 5000 users.", cites)

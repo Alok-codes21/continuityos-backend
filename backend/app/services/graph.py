@@ -106,6 +106,11 @@ def rebuild_graph(db, pid):
                 cn = comp_node(sysname)
                 if cn:
                     edge(person, cn, "has_experience_with", "inferred")
+    # repositories and meetings: nodes for the real sources/records, linked to the components the evidence talks about
+    srcs = {sr.id: sr for sr in db.query(m.Source).filter_by(project_id=pid)}
+    for sr in srcs.values():
+        if sr.source_type == "github":
+            ensure_node(db, pid, "repository", sr.external_id.lower(), sr.name or sr.external_id, {"source_id": sr.id})
     claims = db.query(m.Claim).filter(m.Claim.project_id == pid, m.Claim.status.in_(LIVE)).all()
     for c in claims:
         d, ver = c.details, _vmap(c.status)
@@ -153,6 +158,29 @@ def rebuild_graph(db, pid):
             an = ensure_node(db, pid, "api", c.subject_key, d["endpoint"])
             if d.get("component") and comp_node(d["component"]):
                 edge(an, comp_node(d["component"]), "part_of", ver, c)
+    # risks, repositories and meetings, linked through the evidence behind each claim
+    for c in claims:
+        d = c.details
+        if d.get("draft"):
+            continue
+        cn = comp_node(d.get("component") or d.get("from") or "") if (d.get("component") or d.get("from")) else None
+        if c.category == "risk":
+            rn = ensure_node(db, pid, "risk", c.subject_key, c.statement[:80])
+            if cn:
+                edge(rn, cn, "affects", _vmap(c.status), c)
+        for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).all():
+            rec = db.get(m.SourceRecord, ev.record_id) if ev.record_id else None
+            if not rec:
+                continue
+            sr = srcs.get(rec.source_id)
+            if cn and sr and sr.source_type == "github":
+                edge(cn, ensure_node(db, pid, "repository", sr.external_id.lower(), sr.name or sr.external_id), "lives_in", _vmap(c.status), c)
+            if rec.record_type == "meeting":
+                mn = ensure_node(db, pid, "meeting", rec.id, rec.title or "Meeting")
+                if cn:
+                    edge(mn, cn, "discussed", _vmap(c.status), c)
+                if rec.author:
+                    edge(ensure_person(db, pid, rec.author), mn, "attended", "inferred", c)
     # supersession between decisions
     for c in db.query(m.Claim).filter(m.Claim.project_id == pid, m.Claim.category == "decision", m.Claim.superseded_by.isnot(None)).all():
         newer = db.get(m.Claim, c.superseded_by)

@@ -89,7 +89,12 @@ def _side_tables(db, project, rec, item, claim):
         claims_engine.upsert_component(db, project.id, d["from"])
         claims_engine.upsert_component(db, project.id, d["to"])
     if item.category == "decision" and not db.query(m.Decision).filter_by(project_id=project.id, claim_id=claim.id).first():
-        db.add(m.Decision(project_id=project.id, claim_id=claim.id, title=item.statement[:500], decided_by=d.get("decided_by"),
+        people = []
+        for nm in [d.get("decided_by"), rec.author, *re.findall(r"@([A-Za-z0-9_.-]{2,40})", f"{item.statement} {item.excerpt}")]:
+            if nm and nm not in people:
+                people.append(nm)
+        claim.details = {**claim.details, "participants": people}
+        db.add(m.Decision(project_id=project.id, claim_id=claim.id, title=item.statement[:500], decided_by=d.get("decided_by"), participants=people,
                           alternatives=d.get("alternatives", []), rationale=d.get("rationale", ""), decided_at=rec.occurred_at or m.now(),
                           record_id=rec.id))
     if item.category == "task" and not db.query(m.Task).filter_by(project_id=project.id, title=item.statement[:500]).first():
@@ -102,6 +107,8 @@ def ingest_records(db, project, source, records, actor=None, selections=None, jo
     db.add(job)
     db.flush()
     opted_out = {c.author.lower() for c in db.query(m.ContributorConsent).filter_by(project_id=project.id, granted=False)}
+    opted_in = {c.author.lower() for c in db.query(m.ContributorConsent).filter_by(project_id=project.id, granted=True)}
+    opt_in_mode = getattr(project, "consent_mode", "opt_out") == "opt_in"
     for r in records:
         job.fetched += 1
         if not selection_allows(r, selections):
@@ -110,6 +117,8 @@ def ingest_records(db, project, source, records, actor=None, selections=None, jo
             continue  # integration scope was not approved for this kind of record
         if r.author and r.author.lower() in opted_out:
             continue  # individual withdrew consent for their contributions
+        if opt_in_mode and r.record_type != "document" and (not r.author or r.author.lower() not in opted_in):
+            continue  # opt-in project: only people who explicitly said yes are ingested (uploaded documents are added by a manager)
         clean, findings = redact(r.content)
         title, tfind = redact(r.title or "")
         injected = looks_like_injection(r.content) or looks_like_injection(r.title or "")

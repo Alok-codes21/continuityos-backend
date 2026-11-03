@@ -56,6 +56,7 @@ class Project(Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    consent_mode: Mapped[str] = mapped_column(String(10), default="opt_out")  # opt_out: everyone included unless they withdraw; opt_in: only people who said yes
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -308,6 +309,7 @@ class Decision(Base):
     claim_id: Mapped[str] = mapped_column(String(40), nullable=True)
     title: Mapped[str] = mapped_column(String(500))
     decided_by: Mapped[str] = mapped_column(String(200), nullable=True)
+    participants: Mapped[list] = mapped_column(JSON, default=list)
     alternatives: Mapped[list] = mapped_column(JSON, default=list)
     rationale: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | superseded
