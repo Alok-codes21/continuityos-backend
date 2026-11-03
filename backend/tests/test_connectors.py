@@ -106,3 +106,41 @@ def test_ledger_sequence_unique():
         s.add(m.KnowledgeEvent(project_id="p1", seq=2, event_type="dup", entity_type="x", entity_id="3", hash="h", prev_hash=""))
         with pytest.raises(IntegrityError):
             s.flush()
+
+
+def test_google_drive_connector_reads_selected_folder_docs():
+    from app.connectors.gdrive import GoogleDriveConnector
+
+    def h(req):
+        p = req.url.path
+        if p.endswith("/about"):
+            return httpx.Response(200, json={"user": {"emailAddress": "a@x.io"}})
+        if p.endswith("/export"):
+            return httpx.Response(200, text="Decision: use Postgres because of JSON support. Owner: priya")
+        if p.endswith("/files"):
+            assert "'F1' in parents" in req.url.params.get("q", "") or "folder" in req.url.params.get("q", "")
+            if "folder" in req.url.params["q"]:
+                return httpx.Response(200, json={"files": [{"id": "F1", "name": "Project"}]})
+            return httpx.Response(200, json={"files": [{"id": "D1", "name": "Design", "mimeType": "application/vnd.google-apps.document",
+                                                        "modifiedTime": "2026-02-01T10:00:00Z", "webViewLink": "https://docs/D1", "owners": [{"displayName": "Priya"}]}]})
+        return httpx.Response(404)
+    c = GoogleDriveConnector("t", httpx.Client(transport=httpx.MockTransport(h)))
+    assert c.validate_permissions()["user"] == "a@x.io"
+    assert c.get_available_sources()[0]["source_ref"] == "F1"
+    r = c.fetch_records("F1")
+    assert len(r) == 1 and r[0].source_type == "google_drive" and r[0].author == "Priya" and "Postgres" in r[0].content
+    with pytest.raises(ConnectorError):
+        GoogleDriveConnector("t", httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(401)))).validate_permissions()
+
+
+def test_github_partial_sync_when_token_lacks_pr_issue_access():
+    def h(req):
+        p = req.url.path
+        if p.endswith("/commits"):
+            return httpx.Response(200, json=[{"sha": "abcdef1234567", "html_url": "u", "author": {"login": "p"}, "commit": {"message": "m", "author": {"name": "P", "date": "2026-01-02T10:00:00Z"}}}])
+        if p.endswith("/pulls") or p.endswith("/issues"):
+            return httpx.Response(403, json={})
+        return httpx.Response(404)
+    c = mk(h)
+    recs = c.fetch_records("a/b")
+    assert [r.record_type for r in recs] == ["commit"] and len(c.warnings) == 2

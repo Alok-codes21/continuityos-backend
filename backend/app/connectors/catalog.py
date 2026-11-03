@@ -1,6 +1,7 @@
 """Integration catalogue shown on the Integrations screen. `implemented` is the truth: nothing else is ever shown as connected."""
 from .base import ConnectorUnavailable, SourceConnector
 from .github import GitHubConnector
+from .gdrive import GoogleDriveConnector
 from .slack import SlackConnector
 from .manual_upload import ManualUploadConnector
 
@@ -13,7 +14,7 @@ CATALOG = [
     {"id": "twist", "name": "Twist", "category": "communication", "implemented": False, "note": "Coming soon"},
     {"id": "google_meet", "name": "Google Meet", "category": "meetings", "implemented": False, "note": "Authorised transcripts only"},
     {"id": "zoom", "name": "Zoom", "category": "meetings", "implemented": False, "note": "Authorised transcripts only"},
-    {"id": "google_drive", "name": "Google Drive", "category": "documents", "implemented": False, "note": "Project folder scope - planned for phase 2"},
+    {"id": "google_drive", "name": "Google Drive / Docs", "category": "documents", "implemented": True, "note": "Selected folder only, Docs and text files (read-only)"},
     {"id": "manual_upload", "name": "File upload", "category": "documents", "implemented": True, "builtin": True, "note": "PDF, DOCX, TXT, CSV"},
     {"id": "notion", "name": "Notion", "category": "documents", "implemented": False, "note": "Coming soon"},
 ]
@@ -22,6 +23,8 @@ CATALOG = [
 def get_connector(name: str, token: str = "", client=None) -> SourceConnector:
     if name == "github":
         return GitHubConnector(token, client)
+    if name == "google_drive":
+        return GoogleDriveConnector(token, client)
     if name == "slack":
         return SlackConnector(token, client)
     if name == "manual_upload":
