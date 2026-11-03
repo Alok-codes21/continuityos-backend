@@ -60,5 +60,9 @@ def create_app(test_config=None):
     @app.get("/workspace/knowledge")
     def knowledge_workspace():
         return render_template("knowledge.html")
+
+    @app.get("/workspace/departure")
+    def departure_workspace():
+        return render_template("departure.html")
     
     return app
