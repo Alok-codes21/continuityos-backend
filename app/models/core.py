@@ -269,3 +269,67 @@ class KnowledgeOwnership(db.Model):
             name="uq_knowledge_item_owner"
         ),
     )
+
+
+class InterviewSession(db.Model):
+    __tablename__ = "interview_sessions"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    project_id = db.Column(
+        db.String(36), db.ForeignKey("projects.id"), nullable=False, index=True
+    )
+    departing_user_id = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=False
+    )
+    created_by = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=False
+    )
+    status = db.Column(db.String(30), nullable=False, default="in_progress")
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class InterviewQuestion(db.Model):
+    __tablename__ = "interview_questions"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    session_id = db.Column(
+        db.String(36), db.ForeignKey("interview_sessions.id"),
+        nullable=False, index=True
+    )
+    knowledge_item_id = db.Column(
+        db.String(36), db.ForeignKey("knowledge_items.id"),
+        nullable=True
+    )
+    question = db.Column(db.Text, nullable=False)
+    question_type = db.Column(db.String(40), nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class InterviewAnswer(db.Model):
+    __tablename__ = "interview_answers"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    question_id = db.Column(
+        db.String(36), db.ForeignKey("interview_questions.id"),
+        nullable=False, unique=True
+    )
+    answer = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending_review")
+    reviewed_by = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=True
+    )
+    reviewed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    reviewer_note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )

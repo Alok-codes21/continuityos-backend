@@ -35,6 +35,7 @@ def create_app(test_config=None):
     from app.projects.routes import projects_bp
     from app.ingestion.routes import ingestion_bp
     from app.knowledge.simulator import simulator_bp
+    from app.knowledge.interview import interview_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(projects_bp)
@@ -43,6 +44,7 @@ def create_app(test_config=None):
     app.register_blueprint(graph_bp)
     app.register_blueprint(ledger_bp)
     app.register_blueprint(simulator_bp)
+    app.register_blueprint(interview_bp)
 
     @app.get("/api/health")
     def health():
