@@ -181,6 +181,17 @@ def rebuild_graph(db, pid):
                     edge(mn, cn, "discussed", _vmap(c.status), c)
                 if rec.author:
                     edge(ensure_person(db, pid, rec.author), mn, "attended", "inferred", c)
+    # contributors to each repository, and risks attached to components named in their text
+    for rec in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == pid, m.SourceRecord.source_id.isnot(None), m.SourceRecord.author.isnot(None)):
+        sr = srcs.get(rec.source_id)
+        if sr and sr.source_type == "github" and not rec.injection_suspected:
+            edge(ensure_person(db, pid, rec.author), ensure_node(db, pid, "repository", sr.external_id.lower(), sr.name or sr.external_id), "contributes_to", "inferred")
+    for c in claims:
+        if c.category == "risk" and not c.details.get("draft") and not (c.details.get("component") or c.details.get("from")):
+            rn = ensure_node(db, pid, "risk", c.subject_key, c.statement[:80])
+            for comp in db.query(m.Component).filter_by(project_id=pid):
+                if comp.key and comp.key in c.statement.lower().replace(" ", "-"):
+                    edge(rn, ensure_node(db, pid, "service" if comp.kind != "module" else "module", comp.key, comp.name), "affects", "inferred", c)
     # supersession between decisions
     for c in db.query(m.Claim).filter(m.Claim.project_id == pid, m.Claim.category == "decision", m.Claim.superseded_by.isnot(None)).all():
         newer = db.get(m.Claim, c.superseded_by)

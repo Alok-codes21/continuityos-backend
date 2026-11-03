@@ -96,6 +96,11 @@ def reconcile(db, project_id, now_=None):
         if c.status in ("superseded",) or c.created_by.startswith("system:missing"):
             continue
         t = latest_evidence_time(db, c)
+        ra = c.details.get("reverified_at")
+        if ra and str(ra) > cutoff.isoformat():  # a human re-verified recently: not stale for another period
+            c.freshness = "current" if c.freshness == "stale" else c.freshness
+            c.updated_at = now_
+            continue
         if t and t < cutoff:
             c.freshness = "stale" if c.freshness == "current" else c.freshness
             if c.status in ("evidence_backed", "inferred"):
@@ -112,6 +117,9 @@ def reconcile(db, project_id, now_=None):
                 continue
             newest = (db.query(m.SourceRecord).filter_by(project_id=project_id, source_type=rec.source_type, external_id=rec.external_id)
                       .order_by(m.SourceRecord.version.desc()).first())
+            ra = c.details.get("reverified_at")
+            if ra and newest and str(ra) >= newest.ingested_at.isoformat():
+                continue  # re-verified after the newest version arrived
             if newest and newest.version > rec.version and ev.excerpt not in (newest.content or ""):
                 if c.status == "verified":
                     c.details = {**c.details, "needs_reverification": True, "source_changed": True}

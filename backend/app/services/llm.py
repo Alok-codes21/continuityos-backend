@@ -51,3 +51,10 @@ def followup(question, answer):
                         "Reply with the question only, or NONE if the answer is complete.\n\nQuestion: " + question + "\nAnswer: " + answer)
     out = (out or "").strip()
     return out if out.endswith("?") and len(out) < 220 and "none" not in out.lower()[:5] else None
+
+
+def entails(excerpt, sentence):
+    """Optional second pass: ask the free model whether the excerpt supports the sentence. None when unavailable or unclear."""
+    out = _rephrase_raw("Does the EXCERPT fully support the SENTENCE? Answer only YES or NO.\n\nEXCERPT: " + excerpt + "\nSENTENCE: " + sentence)
+    low = (out or "").strip().lower()
+    return True if low.startswith("yes") else False if low.startswith("no") else None

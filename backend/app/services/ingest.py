@@ -90,7 +90,7 @@ def _side_tables(db, project, rec, item, claim):
         claims_engine.upsert_component(db, project.id, d["to"])
     if item.category == "decision" and not db.query(m.Decision).filter_by(project_id=project.id, claim_id=claim.id).first():
         people = []
-        for nm in [d.get("decided_by"), rec.author, *re.findall(r"@([A-Za-z0-9_.-]{2,40})", f"{item.statement} {item.excerpt}")]:
+        for nm in [d.get("decided_by"), rec.author, *(getattr(rec, "_extra_people", None) or []), *re.findall(r"@([A-Za-z0-9_.-]{2,40})", f"{item.statement} {item.excerpt}")]:
             if nm and nm not in people:
                 people.append(nm)
         claim.details = {**claim.details, "participants": people}
@@ -133,6 +133,9 @@ def ingest_records(db, project, source, records, actor=None, selections=None, jo
                              injection_suspected=injected, version=(prev.version + 1) if prev else 1,
                              visibility="restricted" if (looks_confidential(clean) or (r.meta or {}).get("visibility") == "restricted") else "project",
                              processing_status="flagged" if injected else "processed")
+        rec._extra_people = sorted({*((r.meta or {}).get("reviewers") or []), *((r.meta or {}).get("assignees") or []),
+                                    *[o.author for o in records if o.author and (r.meta or {}).get("thread_ts")
+                                      and (o.meta or {}).get("thread_ts") == (r.meta or {}).get("thread_ts")]} - {None})
         db.add(rec)
         db.flush()
         job.stored += 1

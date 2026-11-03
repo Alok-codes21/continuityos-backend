@@ -179,3 +179,40 @@ def test_since_is_not_treated_as_decision_reason():
     from app.services.extract import extract
     items = extract("Decision: ship the API. We have used it since March.", "document", "t")
     assert all("March" not in str(i.details.get("reason", "")) for i in items)
+
+
+def test_github_paging_cap_is_reported_and_configurable(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "github_max_pages", 2)
+
+    def h(req):
+        p = req.url.path
+        if p.endswith("/commits"):
+            return httpx.Response(200, json=[{"sha": f"{req.url.params['page']}{i}abcdefghij", "html_url": "u", "author": {"login": "p"},
+                                              "commit": {"message": "m", "author": {"name": "P", "date": "2026-01-02T10:00:00Z"}}} for i in range(50)])
+        if p.endswith("/pulls") or p.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+    c = mk(h)
+    recs = c.fetch_records("a/b")
+    assert len(recs) == 100 and c.truncated and any("stopped after 2 pages" in w for w in c.warnings)
+
+
+def test_slack_thread_participants_are_shared():
+    from app.connectors.slack import SlackConnector
+
+    def h(req):
+        if req.url.path.endswith("conversations.history"):
+            return httpx.Response(200, json={"ok": True, "has_more": False, "messages": [{"type": "message", "user": "U1", "ts": "1767340800.1", "text": "Redis?", "reply_count": 1}]})
+        return httpx.Response(200, json={"ok": True, "messages": [{"ts": "1767340800.1"}, {"user": "U2", "ts": "1767340900.2", "text": "yes"}]})
+    recs = SlackConnector("t", httpx.Client(transport=httpx.MockTransport(h))).fetch_records("C1")
+    assert {r.meta["thread_ts"] for r in recs} == {"1767340800.1"}  # same thread id, so ingestion can list both as participants
+
+
+def test_llm_answer_needs_per_sentence_citations():
+    from app.services.rag import _supported
+    cites = [{"quote": "Redis was picked because refund lookups need fast reads"}, {"quote": "Timeout is 30 seconds"}]
+    assert _supported("Redis was picked because refund lookups need fast reads [1]. Timeout is 30 seconds [2].", cites)
+    assert not _supported("Redis was picked because refund lookups need fast reads.", cites)  # no citation
+    assert not _supported("Timeout is 60 seconds [2].", cites)  # number not in the cited excerpt
+    assert not _supported("Redis was picked because refund lookups need fast reads [2].", cites)  # wrong excerpt

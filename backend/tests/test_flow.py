@@ -465,3 +465,21 @@ def test_opt_in_mode_graph_repo_nodes_and_source_changed(client, monkeypatch):
     cites = [{"quote": "Redis was picked because refund lookups need fast reads"}]
     assert _supported("Redis was picked because refund lookups need fast reads [1].", cites)
     assert not _supported("Redis was picked and it handles 5000 users.", cites)
+
+
+def test_reverify_flow(client):
+    admin, priya, gargi, yen, org, pid = setup_team(client)
+    A, G = H(admin["token"]), H(gargi["token"])
+    from app import db as dbm, models as m
+    with dbm.SessionLocal() as db:
+        c = m.Claim(project_id=pid, category="owner", subject_key="owner:x:priya", statement="Priya owns x", details={"needs_reverification": True, "source_changed": True},
+                    status="verified", freshness="stale", created_by="system", verified_by=admin["user"]["id"])
+        db.add(c)
+        db.commit()
+        cid = c.id
+    assert cid in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
+    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=A).status_code == 403  # same person verified it
+    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=G).status_code == 200
+    got = client.get(f"/api/projects/{pid}/claims/{cid}", headers=A).json()
+    assert got["freshness"] == "current" and "needs_reverification" not in got["details"] and got["details"]["reverified_by"] == gargi["user_id"]
+    assert cid not in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
