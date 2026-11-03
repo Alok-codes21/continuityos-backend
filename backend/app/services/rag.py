@@ -63,17 +63,22 @@ def ask(db, project, user, role, question, log_gap=True):
         return {"answer": NO_ANSWER, "citations": [], "answered": False}
     text = " ".join(parts)
     llm_text = llm.rephrase(q, [c["quote"] for c in citations]) if llm.available() else None
-    if llm_text:  # LLM wording is only used when it adds no digits or capitalised names absent from the cited excerpts
-        import re
-        ev_text = " ".join(c["quote"] for c in citations) + " " + question_words(q)
-        new_tokens = set(re.findall(r"\b\d+\b|\b[A-Z][a-z]{2,}\b", llm_text)) - set(re.findall(r"\b\d+\b|\b[A-Z][a-z]{2,}\b", ev_text)) - {"The", "Based", "According", "This", "That", "Yes", "Not"}
-        if new_tokens:
-            llm_text = None
+    if llm_text and not _supported(llm_text, citations):
+        llm_text = None  # every sentence must be backed by the cited excerpts, otherwise the plain cited text is returned
     return {"answer": llm_text or text, "citations": citations, "answered": True, "llm_used": bool(llm_text)}
 
 
-def question_words(q):
-    return q
+def _supported(answer, citations):
+    import re
+    ev = set(re.findall(r"[a-z0-9]{3,}", " ".join(c["quote"] for c in citations).lower()))
+    for sent in re.split(r"(?<=[.!?])\s+", answer):
+        words = set(re.findall(r"[a-z0-9]{3,}", re.sub(r"\[\d+\]", "", sent).lower()))
+        if words and len(words & ev) / len(words) < 0.5:
+            return False
+        nums = set(re.findall(r"\b\d+\b", re.sub(r"\[\d+\]", "", sent)))
+        if nums and not nums <= set(re.findall(r"\b\d+\b", " ".join(c["quote"] for c in citations))):
+            return False
+    return True
 
 
 def _log_gap(db, project, user, q):

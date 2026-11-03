@@ -72,14 +72,16 @@ def simulate(db, pid, person_key_, user=None, persist=True):
         elif len(after) == 1:
             single.append(row)
     edges = db.query(m.GraphEdge).filter_by(project_id=pid).all()
-    tasks = [nodes[e.dst_id] for e in edges if e.src_id == p.id and e.relation == "assigned_to" and not nodes[e.dst_id].props.get("done")]
-    bugs = [nodes[e.dst_id] for e in edges if e.src_id == p.id and e.relation == "working_on" and not nodes[e.dst_id].props.get("resolved")]
-    decided = [nodes[e.dst_id] for e in edges if e.src_id == p.id and e.relation == "decided"]
+    task_edges = [e for e in edges if e.src_id == p.id and e.relation == "assigned_to" and not nodes[e.dst_id].props.get("done")]
+    bug_edges = [e for e in edges if e.src_id == p.id and e.relation == "working_on" and not nodes[e.dst_id].props.get("resolved")]
+    dec_edges = [e for e in edges if e.src_id == p.id and e.relation == "decided"]
+    tasks, bugs, decided = [nodes[e.dst_id] for e in task_edges], [nodes[e.dst_id] for e in bug_edges], [nodes[e.dst_id] for e in dec_edges]
+    ids = lambda es: sorted({e.claim_id for e in es if e.claim_id})
     all_dec = db.query(m.GraphNode).filter_by(project_id=pid, node_type="decision").count()
     verified_rat = {c.subject_key.replace("rationale:", "", 1) for c in db.query(m.Claim).filter_by(project_id=pid, category="rationale", status="verified")}
     undoc = [d for d in decided if not d.props.get("rationale") and d.key not in verified_rat]
     # knowledge only this person's records support
-    sole = 0
+    sole, sole_ids = 0, []
     for c in db.query(m.Claim).filter(m.Claim.project_id == pid, m.Claim.status.in_(G.LIVE)).all():
         evs = db.query(m.EvidenceLink).filter_by(claim_id=c.id).all()
         authors = set()
@@ -88,6 +90,7 @@ def simulate(db, pid, person_key_, user=None, persist=True):
             authors.add(G.norm_person(r.author) if r and r.author else None)
         if authors and authors == {p.key} :
             sole += 1
+            sole_ids.append(c.id)
     gaps = db.query(m.KnowledgeGap).filter_by(project_id=pid, status="open").all()
     comp_keys = {r["key"] for r in comp_rows}
     related_gaps = [g_ for g_ in gaps if (g_.entity_key or "").split(":")[0] in comp_keys or g_.entity_key in {d.key for d in decided}]
@@ -119,13 +122,13 @@ def simulate(db, pid, person_key_, user=None, persist=True):
         why.append({"text": f"After {p.name} leaves, {r['component']} would rest on one person ({r['remaining_holders'][0]}).", "kind": "single_holder", "component": r["key"], "claim_ids": _claims_for(r["key"], None)})
     if decided:
         why.append({"text": f"Decision maker on {len(decided)} of {all_dec} decisions; {len(undoc)} have no recorded reasoning.", "kind": "decisions",
-                    "decisions": len(decided), "total_decisions": all_dec, "without_reasoning": len(undoc)})
+                    "decisions": len(decided), "total_decisions": all_dec, "without_reasoning": len(undoc), "claim_ids": ids(dec_edges)})
     if tasks:
-        why.append({"text": f"{len(tasks)} open task(s) assigned: {', '.join(t.name for t in tasks[:5])}.", "kind": "tasks"})
+        why.append({"text": f"{len(tasks)} open task(s) assigned: {', '.join(t.name for t in tasks[:5])}.", "kind": "tasks", "claim_ids": ids(task_edges)})
     if bugs:
-        why.append({"text": f"{len(bugs)} unresolved bug(s) in progress: {', '.join(b.name for b in bugs[:5])}.", "kind": "bugs"})
+        why.append({"text": f"{len(bugs)} unresolved bug(s) in progress: {', '.join(b.name for b in bugs[:5])}.", "kind": "bugs", "claim_ids": ids(bug_edges)})
     if sole:
-        why.append({"text": f"{sole} claim(s) are supported only by records written by {p.name}.", "kind": "single_source_knowledge"})
+        why.append({"text": f"{sole} claim(s) are supported only by records written by {p.name}.", "kind": "single_source_knowledge", "claim_ids": sole_ids[:50]})
     result = {
         "person": {"key": p.key, "name": p.name, "user_id": p.user_id},
         "level": level, "level_rules": LEVEL_RULES, "holder_definition": HOLDER_DEFINITION,

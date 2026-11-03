@@ -355,3 +355,16 @@ def set_consent(body: dict, ctx=Depends(need("manager")), db: Session = Depends(
     audit(db, "consent_changed", ctx.user, ctx.org_id, ctx.pid, "person", author, granted=granted)
     db.commit()
     return {"author": author, "granted": granted, "records_removed": removed}
+
+
+@router.put("/projects/{project_id}/consent-mode")
+def consent_mode(body: dict, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    """opt_out (default): contributors are included until they withdraw. opt_in: only contributors who explicitly consented."""
+    mode = body.get("mode")
+    if mode not in ("opt_out", "opt_in"):
+        raise HTTPException(422, "mode must be opt_out or opt_in")
+    ctx.project.consent_mode = mode
+    ledger.append(db, ctx.pid, "consent_mode_changed", "project", ctx.pid, actor=ctx.user.id, new_state={"mode": mode}, verification="verified")
+    audit(db, "consent_mode_changed", ctx.user, ctx.org_id, ctx.pid, mode=mode)
+    db.commit()
+    return {"mode": mode}
