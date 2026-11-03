@@ -8,6 +8,7 @@ from app.models.core import (
     ProjectMember,
     Document,
     KnowledgeItem,
+    KnowledgeDependency,
 )
 
 graph_bp = Blueprint(
@@ -84,6 +85,19 @@ def get_project_graph(project_id):
             "target": document_node_id,
             "type": "contains",
             "evidence": None,
+        })
+
+        dependencies = KnowledgeDependency.query.filter_by(
+        project_id=project_id
+    ).all()
+
+    for dependency in dependencies:
+        edges.append({
+            "id": f"dependency:{dependency.id}",
+            "source": f"knowledge:{dependency.source_item_id}",
+            "target": f"knowledge:{dependency.target_item_id}",
+            "type": dependency.relationship_type,
+            "evidence": dependency.description,
         })
 
     for item in knowledge_items:

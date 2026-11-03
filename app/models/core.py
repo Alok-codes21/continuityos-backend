@@ -333,3 +333,63 @@ class InterviewAnswer(db.Model):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class KnowledgeDependency(db.Model):
+    __tablename__ = "knowledge_dependencies"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+
+    project_id = db.Column(
+        db.String(36),
+        db.ForeignKey("projects.id"),
+        nullable=False,
+        index=True,
+    )
+
+    source_item_id = db.Column(
+        db.String(36),
+        db.ForeignKey("knowledge_items.id"),
+        nullable=False,
+        index=True,
+    )
+
+    target_item_id = db.Column(
+        db.String(36),
+        db.ForeignKey("knowledge_items.id"),
+        nullable=False,
+        index=True,
+    )
+
+    relationship_type = db.Column(
+        db.String(40),
+        nullable=False,
+        default="related_to",
+    )
+
+    description = db.Column(db.Text, nullable=True)
+
+    created_by = db.Column(
+        db.String(36),
+        db.ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "source_item_id",
+            "target_item_id",
+            "relationship_type",
+            name="uq_knowledge_dependency",
+        ),
+        db.CheckConstraint(
+            "source_item_id != target_item_id",
+            name="ck_knowledge_dependency_not_self",
+        ),
+    )

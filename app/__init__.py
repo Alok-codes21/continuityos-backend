@@ -7,6 +7,7 @@ from app import models
 from app.knowledge.routes import knowledge_bp
 from app.knowledge.graph import graph_bp
 from app.knowledge.ledger import ledger_bp
+from app.knowledge.dependencies import dependencies_bp
 
 
 def create_app(test_config=None):
@@ -45,6 +46,7 @@ def create_app(test_config=None):
     app.register_blueprint(ledger_bp)
     app.register_blueprint(simulator_bp)
     app.register_blueprint(interview_bp)
+    app.register_blueprint(dependencies_bp)
 
     @app.get("/api/health")
     def health():
