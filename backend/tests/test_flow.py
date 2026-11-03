@@ -531,3 +531,36 @@ def test_sync_fail_closed_on_scopes(client, monkeypatch):
     # unknown scope is rejected
     assert client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
                                                              "scopes": {"permissions": ["bogus"]}}, headers=H(t)).status_code == 422
+
+
+def test_gdrive_default_scope_and_meeting_decision_participants(client, monkeypatch):
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord
+    from datetime import datetime
+
+    class Fake:
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {"scopes": ["drive.readonly"]}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("google_drive", "d1", "document", "Doc", "payments-service uses postgres", "gargi", None, datetime(2026, 1, 2), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "gd@x.io", "G")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "google_drive", "token": "tok", "consent": True}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "f1"}, headers=H(t)).json()["id"]
+    client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t))
+    assert client.get(f"/api/projects/{pid}/records", headers=H(t)).json()
+
+    notes = ("Meeting notes - sync\nAttendees: Priya Sharma, Gargi Yadav\n"
+             "We decided to switch the payments-service cache to Redis because lookups are slow.")
+    r = up(client, t, pid, "notes.txt", notes, author="Priya Sharma")
+    assert r.status_code == 201, r.text
+    from app.db import SessionLocal
+    from app import models as m
+    db = SessionLocal()
+    dec = [d for d in db.query(m.Decision).filter_by(project_id=pid).all() if "Redis" in d.title][0]
+    assert set(dec.participants or []) >= {"Priya Sharma", "Gargi Yadav"}
+    db.close()
+    g = client.get(f"/api/projects/{pid}/graph", headers=H(t)).json()
+    assert any(e["relation"] == "participated_in" for e in g["edges"])

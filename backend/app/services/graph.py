@@ -138,6 +138,8 @@ def rebuild_graph(db, pid):
                 edge(a, b, "depends_on", ver, c)
         elif c.category == "decision":
             dn = ensure_node(db, pid, "decision", c.subject_key, c.statement[:80], {"rationale": bool(d.get("rationale")), "claim_id": c.id})
+            for nm in d.get("participants") or []:
+                edge(ensure_person(db, pid, nm), dn, "participated_in", _vmap(c.status), c)
             if d.get("decided_by"):
                 edge(ensure_person(db, pid, d["decided_by"]), dn, "decided", ver, c)
             if d.get("component") and comp_node(d["component"]):

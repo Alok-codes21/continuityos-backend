@@ -37,7 +37,7 @@ def _org(org_id, db, user, min_role):
 
 SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
                "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
-CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "gdrive": ["documents"], "manual_upload": ["documents"]}
+CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "google_drive": ["documents"], "manual_upload": ["documents"]}
 
 
 class ConnectIn(BaseModel):

@@ -81,6 +81,7 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
     meta = meta or {}
     items = []
     seen = set()
+    meeting_people = []
     ctx_comp = _title_component(title, content)
     is_meeting = record_type == "meeting" or bool(re.search(
         r"(?i)\b(attendees\s*:|meeting notes|minutes of|standup|weekly sync|1:1\b)", (title or "") + "\n" + (content or "")[:600]))
@@ -98,10 +99,10 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
             am = re.search(r"(?i)\b(?:attendees|participants)\s*:\s*(.+)", line)
             if am:
                 people += re.split(r",| and ", am.group(1))
-        for nm in dict.fromkeys(p.strip().strip(".@") for p in people if p and p.strip()):
-            if 1 < len(nm) <= 60:
-                add(Item("attendance", f"attendance:{slug(title or 'meeting', 40)}:{person_key(nm)}",
-                         f"{nm} attended: {(title or 'meeting')[:80]}", {"person": nm}, "evidence_backed", nm))
+        meeting_people = [p.strip().strip(".@") for p in dict.fromkeys(people) if p and 1 < len(p.strip().strip(".@")) <= 60]
+        for nm in meeting_people:
+            add(Item("attendance", f"attendance:{slug(title or 'meeting', 40)}:{person_key(nm)}",
+                     f"{nm} attended: {(title or 'meeting')[:80]}", {"person": nm}, "evidence_backed", nm))
 
     if record_type == "codeowners":
         for line in content.splitlines():
@@ -154,7 +155,8 @@ def extract(record_type: str, title: str, content: str, author: str = None, meta
                 by = dm.group(1)
             add(Item("decision", f"decision:{slug(stmt, 70)}", stmt,
                      {"alternatives": [alt.group(1).strip()] if alt else [], "rationale": why.group(1).strip().rstrip(".") if why else "",
-                      "supersedes": sup.group(1).strip().strip("\"'") if sup else "", "decided_by": by, "component": comp},
+                      "supersedes": sup.group(1).strip().strip("\"'") if sup else "", "decided_by": by, "component": comp,
+                      "participants": meeting_people},
                      "evidence_backed" if why else "inferred", s))
 
         # tasks
