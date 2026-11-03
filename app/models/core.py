@@ -238,3 +238,34 @@ class ContinuityEvent(db.Model):
         nullable=False,
         index=True,
     )
+
+
+
+class KnowledgeOwnership(db.Model):
+    __tablename__ = "knowledge_ownership"
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    project_id = db.Column(
+        db.String(36), db.ForeignKey("projects.id"), nullable=False, index=True
+    )
+    knowledge_item_id = db.Column(
+        db.String(36), db.ForeignKey("knowledge_items.id"), nullable=False, index=True
+    )
+    user_id = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=False, index=True
+    )
+    assigned_by = db.Column(
+        db.String(36), db.ForeignKey("users.id"), nullable=False
+    )
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "knowledge_item_id", "user_id",
+            name="uq_knowledge_item_owner"
+        ),
+    )

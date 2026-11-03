@@ -10,3 +10,4 @@ from app.models.core import (
 from app.models.core import Source, Document, DocumentChunk
 from app.models.core import KnowledgeItem
 from app.models.core import ContinuityEvent
+from app.models.core import KnowledgeOwnership
