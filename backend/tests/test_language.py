@@ -7,7 +7,7 @@ from app.services import handover, interview, llm, rag
 def test_application_fallback_and_interview_templates_are_english():
     assert rag.NO_ANSWER == (
         "I don't have verified knowledge about that in the sources you can access. "
-        "It has been added to the interview queue."
+        "It has been recorded as a knowledge gap."
     )
     cases = {
         "no_documented_owner": "Who owns",

@@ -121,7 +121,9 @@ def reconcile(db, project_id, now_=None):
             ra = c.details.get("reverified_at")
             if ra and newest and str(ra) >= newest.ingested_at.isoformat():
                 continue  # re-verified after the newest version arrived
-            if newest and newest.version > rec.version and ev.excerpt not in (newest.content or ""):
+            if newest and newest.version > rec.version:
+                # A retained substring is not semantic support. Conservatively
+                # re-check all old evidence when this source changes.
                 if c.status == "verified":
                     c.details = {**c.details, "needs_reverification": True, "source_changed": True}
                     c.freshness = "stale"

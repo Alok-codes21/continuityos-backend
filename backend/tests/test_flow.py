@@ -483,7 +483,7 @@ def test_reverify_flow(client):
         cid = c.id
     assert cid in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
     assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=A).status_code == 403  # same person verified it
-    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=G).status_code == 200
+    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=G, json={"reason": "Checked the latest procedure manually"}).status_code == 200
     got = client.get(f"/api/projects/{pid}/claims/{cid}", headers=A).json()
     assert got["freshness"] == "current" and "needs_reverification" not in got["details"] and got["details"]["reverified_by"] == gargi["user_id"]
     assert cid not in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]

@@ -110,7 +110,11 @@ def reverify(claim_id: str, body: dict | None = None, ctx=Depends(need("manager"
         raise HTTPException(409, "Only verified claims are re-verified; others go through the approval flow")
     if c.verified_by == ctx.user.id or c.created_by == ctx.user.id:
         raise HTTPException(403, "A different manager must re-verify this claim")
+    reason = str((body or {}).get("reason", "")).strip()[:500]
+    if len(reason) < 5:
+        raise HTTPException(422, "A reason describing the manual check is required")
     d = {k: v for k, v in c.details.items() if k not in ("needs_reverification", "source_changed")}
+    d.update({"reverification_method": "manual_manager_check", "reverification_reason": reason})
     c.details = {**d, "reverified_at": m.now().isoformat(), "reverified_by": ctx.user.id}
     c.freshness = "current"
     ledger.append(db, ctx.pid, "claim_reverified", "claim", c.id, actor=ctx.user.id, previous_state={"freshness": "stale"}, new_state={"freshness": "current"}, verification="verified")
@@ -294,6 +298,8 @@ def add_skill(body: dict, ctx=Depends(need("incoming")), db: Session = Depends(g
         raise HTTPException(422, "Skill required")
     mgr = ctx.org_role in ("manager", "admin")
     uid_ = body.get("user_id") if mgr and body.get("user_id") else ctx.user.id
+    if not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=uid_).first() or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=uid_).first():
+        raise HTTPException(404, "Project member not found")
     s = m.PeopleKnowledge(project_id=ctx.pid, user_id=uid_, skill=name, level=str(body.get("level", "working"))[:20], source="self_declared", approved=False,
                         profile={k: [str(x)[:120] for x in (body.get(k) or [])][:20] if isinstance(body.get(k), list) else str(body.get(k) or "")[:500]
                                  for k in ("prior_systems", "approaches", "training_needs", "recommendations")})
@@ -309,6 +315,10 @@ def approve_skill(skill_id: str, ctx=Depends(need("manager")), db: Session = Dep
         raise HTTPException(404, "Not found")
     if s.user_id == ctx.user.id:
         raise HTTPException(403, "You cannot approve your own skill")
+    if not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=s.user_id).first() or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=s.user_id).first():
+        raise HTTPException(404, "Project member not found")
+    if s.approved:
+        return {"ok": True}
     s.approved = True
     ledger.append(db, ctx.pid, "skill_approved", "skill", s.id, actor=ctx.user.id, verification="verified")
     graph.rebuild_graph(db, ctx.pid)  # approved incoming knowledge becomes part of organisational memory

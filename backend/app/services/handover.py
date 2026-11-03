@@ -38,7 +38,24 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
     p = graph.resolve_person(db, project.id, person_key_)
     if not p:
         raise HTTPException(404, "Person not found")
+    # All handovers are safe for the assigned incoming role, regardless of
+    # which manager generated or approved them.
+    role = "incoming"
     sim = risk.simulate(db, project.id, p.key, persist=False)
+    visible = access.visible_claims(db, project.id, role)
+    visible_components = {c.details.get("component") for c in visible if c.category in ("owner", "holder", "backup")
+                          and graph.norm_person(c.details.get("owner") or c.details.get("person")) == p.key
+                          and c.status in ("verified", "evidence_backed")}
+    sim["components"] = [row for row in sim["components"] if row["key"] in visible_components]
+    for row in sim["components"]:
+        row["roles"] = sorted({{"owner": "owns", "holder": "verified_holds", "backup": "backup_owner"}[c.category] for c in visible
+                               if c.category in ("owner", "holder", "backup") and c.details.get("component") == row["key"]
+                               and graph.norm_person(c.details.get("owner") or c.details.get("person")) == p.key})
+        row["dependents"] = []  # manager-only simulator traversal is not public evidence
+        row["remaining_holders"] = sorted({c.details.get("owner") or c.details.get("person") for c in visible
+                                          if c.category in ("owner", "holder", "backup") and c.details.get("component") == row["key"]
+                                          and graph.norm_person(c.details.get("owner") or c.details.get("person")) != p.key})
+    sim["level"] = "not_evaluated_for_incoming"
     comps = {r["key"] for r in sim["components"]}
     live = [c for c in access.visible_claims(db, project.id, role) if c.status != "superseded"]
     ver = {c.status for c in live}
@@ -49,7 +66,7 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
                       "claim_id": claim.id if claim else None, "evidence": _evidence(db, claim, role) if claim else []})
 
     for r in sim["components"]:
-        add("summary", f"{r['component']}", f"{p.name} holds this as: {', '.join(r['roles'])}. Dependents: {', '.join(r['dependents']) or 'none recorded'}.")
+        add("summary", f"{r['component']}", f"{p.name} holds this as: {', '.join(r['roles'])}. Dependency details require a manager review.")
     for c in live:
         d = c.details
         if c.details.get("draft"):
@@ -62,8 +79,8 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
         elif c.category == "api" and comp in comps:
             add("systems", c.statement, "API endpoint.", c)
         elif c.category == "decision" and (comp in comps or graph.norm_person(d.get("decided_by")) == p.key):
-            add("decisions", c.statement, f"Reasoning: {d.get('rationale') or 'not recorded yet'}. Alternatives: {', '.join(d.get('alternatives') or []) or 'none recorded'}. Participants: {', '.join(d.get('participants') or []) or 'not recorded'}. Still valid: {'no, superseded' if c.status == 'superseded' else 'yes' if c.status != 'outdated' else 'unclear, source is outdated'}.", c)
-        elif c.category == "rationale" and c.status != "missing":
+            add("decisions", c.statement, f"Reasoning: {d.get('rationale') or 'not recorded yet'}. Alternatives: {', '.join(d.get('alternatives') or []) or 'none recorded'}. Participants: {', '.join(d.get('participants') or []) or 'not recorded'}. Still valid: {'no, superseded' if c.status == 'superseded' else 'confirmed by a manager' if c.status == 'verified' and c.freshness == 'current' else 'not independently confirmed; check current evidence'}.", c)
+        elif c.category == "rationale" and c.status != "missing" and any(d.get("decision") == dc.subject_key and (dc.details.get("component") in comps or graph.norm_person(dc.details.get("decided_by")) == p.key) for dc in live):
             add("decisions", f"Reasoning for {c.subject_key.split(':', 1)[1][:60]}", c.statement, c)
         elif c.category == "procedure" and c.status != "missing" and d.get("component") in comps:
             add("procedures", f"{d.get('topic', 'procedure')} for {d.get('component')}", c.statement, c)
@@ -73,8 +90,8 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
         elif c.category == "config_value" and c.status == "conflicting" and comp in comps:
             add("open_work", c.statement, "Sources disagree on this value. Not yet resolved.", c)
     for g in db.query(m.KnowledgeGap).filter_by(project_id=project.id, status="open").all():
-        if (g.entity_key or "").split(":")[0] in comps:
-            add("gaps", g.description, g.found + " " + g.recommended_action, status="missing")
+        if g.gap_type in ("no_documented_owner", "missing_procedure") and (g.entity_key or "").split(":")[0] in comps:
+            add("gaps", g.description, g.recommended_action, status="missing")
     # contacts: who else holds each component (derived from qualified-holder links)
     for r in sim["components"]:
         if r["remaining_holders"]:
@@ -86,11 +103,11 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
                 re.search(r"(?i)deploy|release|rollback|ship|pipeline|ci/cd", f"{d.get('topic', '')} {c.statement}"):
             add("deployment", f"{d.get('topic', 'deployment')} for {d.get('component')}", c.statement, c)
     # known limitations: what this document cannot vouch for
-    unverified = [c for c in live if c.status in ("inferred", "outdated", "conflicting") and not c.details.get("draft")]
-    stale = [c for c in live if c.details.get("needs_reverification") or c.freshness == "stale"]
-    flagged_recs = db.query(m.SourceRecord).filter_by(project_id=project.id, injection_suspected=True).all()
+    unverified = [c for c in live if c.status in ("inferred", "outdated", "conflicting") and not c.details.get("draft") and (c.details.get("component") in comps)]
+    stale = [c for c in live if (c.details.get("needs_reverification") or c.freshness == "stale") and c.details.get("component") in comps]
+    flagged_recs = [r for r in db.query(m.SourceRecord).filter_by(project_id=project.id, injection_suspected=True) if access.visible_record(r, role)]
     flagged = len(flagged_recs)
-    redacted_recs = [r for r in db.query(m.SourceRecord).filter_by(project_id=project.id) if r.redactions]
+    redacted_recs = [r for r in db.query(m.SourceRecord).filter_by(project_id=project.id) if r.redactions and access.visible_record(r, role)]
     redacted = sum(r.redactions or 0 for r in redacted_recs)
     if unverified:
         add("limitations", f"{len(unverified)} item(s) are not verified", "These are inferred, outdated or conflicting. Treat them as leads, not facts.", status="inferred")
@@ -112,7 +129,7 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
     # first actions: derived from the risks and open gaps found above
     for r in sim["components"]:
         if not r["remaining_holders"]:
-            add("first_actions", f"Take ownership of {r['component']}", f"Nobody else is a qualified holder of {r['component']}. Get the owner statement confirmed first.")
+            add("first_actions", f"Take ownership of {r['component']}", f"No other holder is documented in your accessible evidence for {r['component']}. Ask a manager to confirm backup coverage.")
     for it in [i for i in items if i["section"] == "open_work"][:3]:
         add("first_actions", f"Pick up: {it['title'][:120]}", "Open item assigned to or touching this person.")
     for it in [i for i in items if i["section"] == "gaps"][:3]:
@@ -139,11 +156,19 @@ def to_dict(db, h, with_items=True):
     return d
 
 
+def content_digest(db, h):
+    import hashlib, json
+    return hashlib.sha256(json.dumps(to_dict(db, h)["sections"], sort_keys=True, default=str).encode()).hexdigest()
+
+
 def request_approval(db, project, h, user):
     if (h.summary or {}).get("status") == "approved":
         raise HTTPException(409, "Already approved")
+    prior = db.query(m.Approval).filter_by(project_id=project.id, kind="handover_doc", target_id=h.id, status="pending").first()
+    if prior:
+        return prior
     ap = m.Approval(project_id=project.id, kind="handover_doc", target_id=h.id, status="pending",
-                    payload={"person": h.departing_person_key, "version": h.summary.get("version")}, requested_by=user.id)
+                    payload={"person": h.departing_person_key, "version": h.summary.get("version"), "digest": content_digest(db, h)}, requested_by=user.id)
     db.add(ap)
     db.flush()
     return ap
@@ -153,6 +178,10 @@ def approve(db, project, ap, approver):
     h = db.get(m.Handover, ap.target_id)
     if not h or h.project_id != project.id:
         raise HTTPException(404, "Not found")
+    if approver.id == ap.requested_by:
+        raise HTTPException(403, "You cannot approve your own request")
+    if ap.payload.get("version") != h.summary.get("version") or ap.payload.get("digest") != content_digest(db, h):
+        raise HTTPException(409, "Handover changed after the approval request; request a new review")
     h.summary = {**h.summary, "status": "approved", "approved_by": approver.id}
     ledger.append(db, project.id, "handover_approved", "handover", h.id, actor=approver.id, verification="verified")
 

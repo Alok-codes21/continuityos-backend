@@ -149,3 +149,28 @@ as one unambiguous claim of the same category; unsupported free-form edits retur
 cover inclusion/exclusion only, not date/type/file-selection edits. Graph edges
 retain a primary claim reference; complete supporting evidence is available on
 claims, but a relationship-evidence join table is still a future improvement.
+
+### Handover audience and runtime safeguards
+
+Handover snapshots are generated for incoming visibility, never manager visibility.
+Manager-only simulation risk/dependents are not copied into incoming documents.
+Live claim visibility is rechecked when incoming members read/export, and the
+normal project context rejects removed members. Handover approval binds a content
+digest and version; pending requests are idempotent. Source updates can make old
+snapshots stale: regenerate after material changes. Existing pre-upgrade handovers
+must be deleted/regenerated; the new filtering cannot sanitize their stored text.
+Q&A ignores historical source versions, stale/conflicting claims and generic
+approved corrections whose old source quote does not support the edited statement.
+Without a model, answers use retrieved text; lexical validation is still not general
+semantic proof. Entailment accepts only an exact YES/NO. Rehearsal is sampled
+workspace knowledge coverage, not employee competency; unresolved conflicts fail.
+Re-verification requires a reason and is labelled a manual manager check.
+
+Set APP_ENV=production explicitly. It rejects the development JWT secret, missing
+field-encryption key, implicit/SQLite database and invalid time/page ranges. TLS_CERT
+and TLS_KEY must both be present or both absent. /api/health is liveness; /api/ready
+checks database connectivity and the projects table, NOT a complete schema migration
+or encryption-backfill verification. There is still no migration runner or production
+schema-version gate, no real PostgreSQL/container/HTTPS smoke test in this audit,
+and upload concurrency must be bounded by the hosting proxy. These are deployment
+blockers, not evidence that the backend is production-ready.

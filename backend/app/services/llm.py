@@ -57,4 +57,4 @@ def entails(excerpt, sentence):
     """Optional second pass: ask the free model whether the excerpt supports the sentence. None when unavailable or unclear."""
     out = _rephrase_raw("Does the EXCERPT fully support the SENTENCE? Answer in English, only YES or NO.\n\nEXCERPT: " + excerpt + "\nSENTENCE: " + sentence)
     low = (out or "").strip().lower()
-    return True if low.startswith("yes") else False if low.startswith("no") else None
+    return True if low.rstrip(".! ") == "yes" else False if low.rstrip(".! ") == "no" else None

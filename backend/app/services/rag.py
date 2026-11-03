@@ -5,7 +5,7 @@ from .embed import cosine, embed, overlap
 from .extract import sentences
 from . import llm
 
-NO_ANSWER = "I don't have verified knowledge about that in the sources you can access. It has been added to the interview queue."
+NO_ANSWER = "I don't have verified knowledge about that in the sources you can access. It has been recorded as a knowledge gap."
 THRESHOLD = 0.5
 
 
@@ -14,6 +14,14 @@ def ask(db, project, user, role, question, log_gap=True):
     qv = embed(q)
     recs = {r.id: r for r in db.query(m.SourceRecord).filter_by(project_id=project.id)
             if access.visible_record(r, role) and not r.injection_suspected}
+    # Superseded source snapshots remain auditable, not current answer evidence.
+    newest = {}
+    for record in db.query(m.SourceRecord).filter_by(project_id=project.id):
+        key = (record.source_id, record.source_type, record.external_id)
+        if key not in newest or record.version > newest[key].version:
+            newest[key] = record
+    current_ids = {record.id for record in newest.values()}
+    recs = {key: value for key, value in recs.items() if key in current_ids}
     scored = []
     for ch in db.query(m.DocumentChunk).filter_by(project_id=project.id):
         if ch.record_id not in recs:
@@ -24,7 +32,13 @@ def ask(db, project, user, role, question, log_gap=True):
     scored.sort(key=lambda x: -x[0])
     cands = []  # (score, citation, text)
     for c in access.visible_claims(db, project.id, role):
-        if c.status in ("missing", "superseded") or c.details.get("draft"):
+        if c.status in ("missing", "superseded", "conflicting", "outdated") or c.freshness == "stale" or c.details.get("draft"):
+            continue
+        if c.details.get("verification_method") == "approved_correction":
+            # Original source excerpts support the old statement, not the edit.
+            # Corrections remain visible for human review but are not RAG proof.
+            continue
+        if c.details.get("needs_reverification"):
             continue
         sc = overlap(q, c.statement + " " + " ".join(str(v) for v in c.details.values() if isinstance(v, str)))
         if c.category in ("component", "contribution"):
@@ -79,6 +93,9 @@ def _supported(answer, citations):
         ev_text = " ".join(citations[k - 1]["quote"] for k in marks)
         ev = set(re.findall(r"[a-z0-9]{3,}", ev_text.lower()))
         words = set(re.findall(r"[a-z0-9]{3,}", body.lower()))
+        neg = {"not", "no", "never", "without", "cannot"}
+        if (words & neg) != (ev & neg):
+            return False
         if words and len(words & ev) / len(words) < 0.6:
             return False
         if set(re.findall(r"\b\d+\b", body)) - set(re.findall(r"\b\d+\b", ev_text)):
