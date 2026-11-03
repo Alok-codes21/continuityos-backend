@@ -40,7 +40,10 @@ def bus_factor(db, pid):
     for cid, hs in hm.items():
         c = nodes[cid]
         rows.append({"component": c.name, "key": c.key, "bus_factor": len(hs), "level": level_for_count(len(hs)),
-                     "holders": [{"person": nodes[p].name, "key": nodes[p].key, "roles": sorted(set(r))} for p, r in hs.items()]})
+                     "holders": [{"person": nodes[p].name, "key": nodes[p].key, "roles": sorted(set(r))} for p, r in hs.items()],
+                     "role_counts": {"documented_owner": sum("owns" in r for r in hs.values()),
+                                     "verified_holder": sum("verified_holds" in r for r in hs.values()),
+                                     "backup_owner": sum("backup_owner" in r for r in hs.values())}})
     rows.sort(key=lambda r: (r["bus_factor"], r["key"]))
     return {"definition": HOLDER_DEFINITION, "components": rows}
 

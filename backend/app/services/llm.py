@@ -22,10 +22,14 @@ def rephrase(question, excerpts):
 
 
 def _rephrase(question, excerpts):
-    if not available():
-        return None
     prompt = ("Answer the question using ONLY the numbered excerpts. Cite as [n]. If they do not answer it, say so.\n\n"
               + "\n".join(f"[{i + 1}] {e}" for i, e in enumerate(excerpts)) + f"\n\nQuestion: {question}")
+    return _rephrase_raw(prompt)
+
+
+def _rephrase_raw(prompt):
+    if not available():
+        return None
     try:
         if settings.llm_provider == "groq":
             r = httpx.post("https://api.groq.com/openai/v1/chat/completions", timeout=20,
@@ -39,3 +43,11 @@ def _rephrase(question, excerpts):
     except Exception:
         return None
     return None
+
+
+def followup(question, answer):
+    """Optional: one short follow-up question that targets what the answer left out. Rule-based follow-ups run first."""
+    out = _rephrase_raw("Ask ONE short follow-up question (max 25 words) about what is missing from this handover answer. "
+                        "Reply with the question only, or NONE if the answer is complete.\n\nQuestion: " + question + "\nAnswer: " + answer)
+    out = (out or "").strip()
+    return out if out.endswith("?") and len(out) < 220 and "none" not in out.lower()[:5] else None

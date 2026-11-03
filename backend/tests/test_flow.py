@@ -274,7 +274,7 @@ def test_full_interview_to_handover_flow(client):
     # handover doc
     h = client.post(f"/api/projects/{pid}/handovers", json={"person": "priyasharma", "incoming_user_id": yen["user_id"]}, headers=G).json()
     secs = {s["key"]: s for s in h["sections"]}
-    assert len(secs) == 7 and secs["ownership"]["items"] and all(i["evidence"] for i in secs["ownership"]["items"])
+    assert len(secs) == 10 and secs["ownership"]["items"] and all(i["evidence"] for i in secs["ownership"]["items"])
     assert any(i["evidence"] for i in secs["decisions"]["items"])
     # incoming user can't see an unapproved handover
     assert client.get(f"/api/projects/{pid}/handovers/{h['id']}", headers=Y).status_code == 404
@@ -289,6 +289,10 @@ def test_full_interview_to_handover_flow(client):
     s = client.post(f"/api/projects/{pid}/rehearsal", headers=Y).json()["id"]
     a = client.post(f"/api/projects/{pid}/rehearsal/{s}/ask", json={"question": "What is the payments-service timeout?"}, headers=Y).json()
     assert a["answered"] and a["turns"] == 1
+    ev = client.post(f"/api/projects/{pid}/rehearsal/{s}/evaluate", headers=Y).json()
+    assert ev["scenarios"] >= 1 and 0 <= ev["score"] <= 1 and ev["readiness"] in ("ready", "partly_ready", "not_ready") and "missed_topics" in ev
+    assert "first_actions" in secs and "contacts" in secs and "deployment" in secs
+    assert all("claim_ids" in w for w in sim["why"] if w["kind"] in ("orphaned_component", "single_holder"))
     # overview
     ov = client.get(f"/api/projects/{pid}/overview", headers=A).json()
     assert 0 < ov["health_score"] <= 100 and ov["state_counts"]["verified"] >= 2 and len(ov["ingestion_14d"]) == 14
@@ -348,3 +352,77 @@ def test_delete_all_records_of_a_source_and_retrieval_audit(client, monkeypatch)
     client.post(f"/api/projects/{pid}/ask", json={"question": "who owns billing"}, headers=H(t))
     acts = [e["action"] for e in client.get(f"/api/orgs/{org}/audit", headers=H(t)).json()]
     assert "source_records_deleted" in acts and "ai_retrieval" in acts
+
+
+def test_individual_consent_encryption_confidential_and_scope(client, monkeypatch):
+    from datetime import datetime
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord, SourceConnector
+    from app import db as dbm, models as m
+
+    class Fake(SourceConnector):
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("github", "c1", "commit", "t1", "fix payments-service retry", "priyasharma", None, datetime(2026, 1, 2), source_ref),
+                    NormalizedRecord("github", "c2", "commit", "t2", "tune billing-service cache", "gargi", None, datetime(2026, 1, 3), source_ref),
+                    NormalizedRecord("github", "c3", "issue", "t3", "salary review plan is confidential", "gargi", None, datetime(2026, 1, 4), source_ref),
+                    NormalizedRecord("github", "c4", "pull_request", "t4", "pr text", "gargi", None, datetime(2026, 1, 5), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "e@x.io", "E")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True,
+                                                            "scopes": {"permissions": ["commits", "issues"]}}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "a/b"}, headers=H(t)).json()["id"]
+    r = client.put(f"/api/projects/{pid}/consents", json={"author": "gargi", "granted": False}, headers=H(t))
+    assert r.status_code == 200
+    job = client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t)).json()
+    assert job["stored"] == 1  # gargi opted out; pull_request scope not approved
+    client.put(f"/api/projects/{pid}/consents", json={"author": "gargi", "granted": True}, headers=H(t))
+    job = client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t)).json()
+    recs = {x["title"]: x for x in client.get(f"/api/projects/{pid}/records", headers=H(t)).json()}
+    assert set(recs) == {"t1", "t2", "t3"}  # pull request never stored (scope not approved)
+    assert recs["t3"].get("visibility") == "restricted"  # confidential wording
+    # withdrawing consent removes what was already stored
+    out = client.put(f"/api/projects/{pid}/consents", json={"author": "gargi", "granted": False}, headers=H(t)).json()
+    assert out["records_removed"] == 2
+    # stored text is encrypted in the database but readable through the API
+    with dbm.engine.connect() as c:
+        raw = c.exec_driver_sql("select content from source_records").fetchall()
+    assert raw and all(x[0].startswith("enc1:") and "payments-service" not in x[0] for x in raw)
+    rid = client.get(f"/api/projects/{pid}/records", headers=H(t)).json()[0]["id"]
+    assert "payments-service" in client.get(f"/api/projects/{pid}/records/{rid}", headers=H(t)).json()["content"]
+
+
+def test_github_incremental_cursor_skips_old_prs():
+    import httpx
+    from datetime import datetime
+    from app.connectors.github import GitHubConnector
+    seen = {}
+
+    def h(req):
+        p = req.url.path
+        seen[p.rsplit("/", 1)[-1]] = dict(req.url.params)
+        if p.endswith("/pulls"):
+            return httpx.Response(200, json=[{"number": 1, "title": "old", "updated_at": "2026-01-01T00:00:00Z", "created_at": "2026-01-01T00:00:00Z", "user": {"login": "a"}},
+                                             {"number": 2, "title": "new", "updated_at": "2026-03-01T00:00:00Z", "created_at": "2026-03-01T00:00:00Z", "user": {"login": "a"}}])
+        if p.endswith("/commits") or p.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+    c = GitHubConnector("t", httpx.Client(transport=httpx.MockTransport(h)))
+    recs = c.fetch_records("a/b", cursor="2026-02-01T00:00:00")
+    assert [r.title for r in recs] == ["PR #2: new"] and seen["commits"]["since"].startswith("2026-02-01")
+
+
+def test_adaptive_followups_are_contextual():
+    from types import SimpleNamespace as S
+    from app.services import interview
+    class FakeDB:
+        def get(self, model, id_): return S(gap_type="no_documented_owner", entity_key="payments-service:owner", id="g1")
+        def add(self, x): pass
+        def flush(self): pass
+    q = S(gap_id="g1", parent_question_id=None, question="Who owns payments-service?", context={}, id="q1", position=1)
+    fq = interview._followup(FakeDB(), S(id="i1"), q, "Priya owns it")
+    assert fq is not None and "backup" in fq.question.lower()
+    assert interview._followup(FakeDB(), S(id="i1"), q, "Priya owns it, Gargi is the backup") is None

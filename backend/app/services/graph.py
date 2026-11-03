@@ -94,6 +94,18 @@ def rebuild_graph(db, pid):
             return None
         return ensure_node(db, pid, "service" if c.kind != "module" else "module", c.key, c.name)
 
+    for sk in db.query(m.PeopleKnowledge).filter_by(project_id=pid, approved=True).all():
+        person = db.query(m.GraphNode).filter_by(project_id=pid, node_type="person", user_id=sk.user_id).first()
+        if not person:
+            u = db.get(m.User, sk.user_id)
+            person = ensure_person(db, pid, u.name) if u else None
+        if person:
+            sn = ensure_node(db, pid, "skill", norm_person(sk.skill) or sk.skill.lower(), sk.skill, {"level": sk.level})
+            edge(person, sn, "has_skill", "verified")
+            for sysname in (sk.profile or {}).get("prior_systems") or []:
+                cn = comp_node(sysname)
+                if cn:
+                    edge(person, cn, "has_experience_with", "inferred")
     claims = db.query(m.Claim).filter(m.Claim.project_id == pid, m.Claim.status.in_(LIVE)).all()
     for c in claims:
         d, ver = c.details, _vmap(c.status)
