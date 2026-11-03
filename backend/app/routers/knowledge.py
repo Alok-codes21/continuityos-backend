@@ -94,6 +94,31 @@ def correct(claim_id: str, body: CorrectionIn, ctx=Depends(need("contributor")),
     return {"approval_id": ap.id}
 
 
+@router.get("/claims-needing-reverification")
+def needs_reverification(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    rows = [c for c in access.visible_claims(db, ctx.pid, ctx.org_role) if c.details.get("needs_reverification") or (c.status == "verified" and c.freshness == "stale")]
+    return [claim_dict(db, c, ctx.org_role) for c in rows]
+
+
+@router.post("/claims/{claim_id}/reverify")
+def reverify(claim_id: str, body: dict | None = None, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    """A manager confirms a stale or source-changed verified claim is still true. Someone who wrote the claim cannot re-verify it."""
+    c = db.get(m.Claim, claim_id)
+    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+        raise HTTPException(404, "Not found")
+    if c.status != "verified":
+        raise HTTPException(409, "Only verified claims are re-verified; others go through the approval flow")
+    if c.verified_by == ctx.user.id or c.created_by == ctx.user.id:
+        raise HTTPException(403, "A different manager must re-verify this claim")
+    d = {k: v for k, v in c.details.items() if k not in ("needs_reverification", "source_changed")}
+    c.details = {**d, "reverified_at": m.now().isoformat(), "reverified_by": ctx.user.id}
+    c.freshness = "current"
+    ledger.append(db, ctx.pid, "claim_reverified", "claim", c.id, actor=ctx.user.id, previous_state={"freshness": "stale"}, new_state={"freshness": "current"}, verification="verified")
+    audit(db, "claim_reverified", ctx.user, ctx.org_id, ctx.pid, "claim", c.id)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/ledger")
 def ledger_list(limit: int = 100, before_seq: int | None = None, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     q = db.query(m.KnowledgeEvent).filter_by(project_id=ctx.pid)

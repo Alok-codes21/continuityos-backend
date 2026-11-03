@@ -69,14 +69,21 @@ def ask(db, project, user, role, question, log_gap=True):
 
 
 def _supported(answer, citations):
+    """Every sentence must cite an excerpt [n], and be backed by THAT excerpt: most of its words, and all its numbers, appear in it."""
     import re
-    ev = set(re.findall(r"[a-z0-9]{3,}", " ".join(c["quote"] for c in citations).lower()))
-    for sent in re.split(r"(?<=[.!?])\s+", answer):
-        words = set(re.findall(r"[a-z0-9]{3,}", re.sub(r"\[\d+\]", "", sent).lower()))
-        if words and len(words & ev) / len(words) < 0.5:
+    for sent in re.split(r"(?<=[.!?])\s+", answer.strip()):
+        marks = [int(x) for x in re.findall(r"\[(\d+)\]", sent)]
+        if not marks or any(k < 1 or k > len(citations) for k in marks):
             return False
-        nums = set(re.findall(r"\b\d+\b", re.sub(r"\[\d+\]", "", sent)))
-        if nums and not nums <= set(re.findall(r"\b\d+\b", " ".join(c["quote"] for c in citations))):
+        body = re.sub(r"\[\d+\]", "", sent)
+        ev_text = " ".join(citations[k - 1]["quote"] for k in marks)
+        ev = set(re.findall(r"[a-z0-9]{3,}", ev_text.lower()))
+        words = set(re.findall(r"[a-z0-9]{3,}", body.lower()))
+        if words and len(words & ev) / len(words) < 0.6:
+            return False
+        if set(re.findall(r"\b\d+\b", body)) - set(re.findall(r"\b\d+\b", ev_text)):
+            return False
+        if llm.available() and llm.entails(ev_text, body) is False:
             return False
     return True
 

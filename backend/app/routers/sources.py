@@ -206,7 +206,8 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]
-    s.last_cursor = datetime.utcnow().isoformat()
+    if not getattr(conn, "truncated", False):  # a capped fetch must not move the cursor, or the rest would be skipped forever
+        s.last_cursor = datetime.utcnow().isoformat()
     audit(db, "source_synced", ctx.user, ctx.org_id, ctx.pid, "source", s.id, stored=job.stored)
     db.commit()
     return _job_dict(job)

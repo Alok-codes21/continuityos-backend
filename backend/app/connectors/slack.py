@@ -67,7 +67,7 @@ class SlackConnector(SourceConnector):
 
     def _replies(self, channel, thread_ts):
         d = self._call("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": self.per_page})
-        return [self.normalize_record(r, channel) for r in d.get("messages", [])
+        return [self.normalize_record({**r, "thread_ts": thread_ts}, channel) for r in d.get("messages", [])
                 if r.get("ts") != thread_ts and not r.get("subtype") and r.get("text")]
 
     def normalize_record(self, raw, source_ref=""):
@@ -75,7 +75,7 @@ class SlackConnector(SourceConnector):
         text = raw.get("text", "")
         when = datetime.fromtimestamp(float(ts), tz=timezone.utc).replace(tzinfo=None)
         return NormalizedRecord("slack", f"{source_ref}:{ts}", "message", text.split("\n")[0][:120], text, raw.get("user"),
-                                None, when, source_ref, {"thread_ts": raw.get("thread_ts")})
+                                None, when, source_ref, {"thread_ts": raw.get("thread_ts") or (raw["ts"] if raw.get("reply_count") else None)})
 
     def revoke_access(self):
         try:

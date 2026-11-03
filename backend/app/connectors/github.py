@@ -17,13 +17,14 @@ def _dt(s):
 
 class GitHubConnector(SourceConnector):
     name = "github"
-    max_pages = 5
+    max_pages = None  # defaults to settings.github_max_pages
     per_page = 50
 
     def __init__(self, token: str = "", client: httpx.Client = None):
         self.token = token
         self.client = client or httpx.Client(timeout=20)
         self.warnings = []
+        self.truncated = False
 
     def authenticate(self, credentials):
         self.token = credentials.get("token", "")
@@ -53,12 +54,17 @@ class GitHubConnector(SourceConnector):
         return [{"source_ref": r["full_name"], "name": r["full_name"], "private": r.get("private", False)} for r in repos]
 
     def _paged(self, path, params):
+        from ..config import settings
+        limit = self.max_pages or settings.github_max_pages
         out = []
-        for page in range(1, self.max_pages + 1):
+        for page in range(1, limit + 1):
             data = self._get(path, {**params, "per_page": self.per_page, "page": page})
             out.extend(data)
             if len(data) < self.per_page:
                 break
+        else:
+            self.truncated = True
+            self.warnings.append(f"{path.rsplit('/', 1)[-1]}: stopped after {limit} pages, more records exist")
         return out
 
     def fetch_records(self, source_ref, cursor=None, since=None, until=None):
@@ -69,7 +75,7 @@ class GitHubConnector(SourceConnector):
                 since = None
         p = {"since": since.isoformat() + "Z"} if since else {}
         recs = []
-        self.warnings = []
+        self.warnings, self.truncated = [], False
         for kind, path, params in (("commit", "commits", p), ("pull_request", "pulls", {"state": "all", "sort": "updated", "direction": "desc"}), ("issue", "issues", {"state": "all", **p})):
             try:
                 items = self._paged(f"/repos/{source_ref}/{path}", params)
