@@ -1,7 +1,7 @@
 
 import os
 
-from flask import Flask, app, jsonify
+from flask import Flask, jsonify, render_template
 from app.extensions import db, migrate, jwt
 from app import models
 from app.knowledge.routes import knowledge_bp
@@ -53,4 +53,7 @@ def create_app(test_config=None):
             "status": "running"
         })
 
+    @app.get("/")
+    def frontend():
+        return render_template("index.html")
     return app
