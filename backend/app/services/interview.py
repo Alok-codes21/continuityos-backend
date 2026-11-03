@@ -5,7 +5,7 @@ import re
 from fastapi import HTTPException
 
 from .. import models as m
-from . import claims_engine, graph, ledger
+from . import llm, claims_engine, graph, ledger
 from .extract import NUMWORDS, comp_base, person_key
 
 DETAIL_MIN_WORDS = 4
@@ -104,15 +104,30 @@ def _followup(db, iv, q, answer):
     if not g or q.parent_question_id:
         return None
     gt, words = g.gap_type, len(answer.split())
+    low = answer.lower()
+    comp = (g.entity_key or "").split(":")[0]
     text = None
     if gt == "conflict":
         vals = _conflict_values(db, g)
-        if not (_num_in(answer) & {str(v) for v in vals}) and not any(str(v).lower() in answer.lower() for v in vals):
+        if not (_num_in(answer) & {str(v) for v in vals}) and not any(str(v).lower() in low for v in vals):
             text = f"Which exact value is correct: {', '.join(str(v) for v in vals)}? Please name one."
-    elif gt in ("missing_procedure", "undocumented_decision") and words < DETAIL_MIN_WORDS:
-        text = "Can you add a bit more detail so a new person could act on it? What are the concrete steps or reasons?"
-    elif gt == "no_documented_owner" and words < 1:
-        text = "Please name the owner."
+    elif gt == "missing_procedure":
+        if words < DETAIL_MIN_WORDS:
+            text = "Can you add a bit more detail so a new person could act on it? What are the concrete steps?"
+        elif not re.search(r"\b(?:step|first|then|next|run|restart|check|deploy|rollback|verify|after)\b|\d\.|->", low):
+            text = f"What are the steps for {comp}, in order, and how do you know each one worked?"
+    elif gt == "undocumented_decision":
+        if words < DETAIL_MIN_WORDS:
+            text = "Can you add a bit more detail so a new person could act on it? What are the concrete reasons?"
+        elif not re.search(r"\b(?:because|so that|due to|reason|trade-?off|instead|alternative|risk)\b", low):
+            text = "What was the reason for this decision, and what other options were considered?"
+    elif gt == "no_documented_owner":
+        if words < 1:
+            text = "Please name the owner."
+        elif not re.search(r"\b(?:backup|deputy|alternate|second|cover|also knows)\b", low):
+            text = f"Who could cover {comp} if the owner is away? Please name a backup."
+    if text is None and llm.available():
+        text = llm.followup(q.question, answer)
     if not text:
         return None
     fq = m.InterviewQuestion(interview_id=iv.id, gap_id=g.id, parent_question_id=q.id, question=text, context=q.context, status="open",

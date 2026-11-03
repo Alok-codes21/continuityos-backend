@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .. import models as m
 from ..db import get_db
 from ..security import audit, need
-from ..services import access, claims_engine, graph, ledger, rag, risk
+from ..services import access, claims_engine, graph, ledger, rag, rehearsal, risk
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["knowledge"])
 STATES = ["verified", "evidence_backed", "inferred", "conflicting", "outdated", "missing", "superseded"]
@@ -218,8 +218,21 @@ def rehearsal_ask(session_id: str, body: AskIn, ctx=Depends(need("incoming")), d
     r = rag.ask(db, ctx.project, ctx.user, ctx.org_role, body.question)
     s.turns = [*s.turns, {"q": body.question, "answered": r["answered"], "answer": r["answer"], "citations": r["citations"]}]
     db.commit()
-    answered = sum(1 for t in s.turns if t["answered"])
+    answered = sum(1 for t in s.turns if t.get("answered"))
     return {**r, "turns": len(s.turns), "answered_turns": answered}
+
+
+@router.post("/rehearsal/{session_id}/evaluate")
+def rehearsal_evaluate(session_id: str, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
+    """Scenario-based readiness: can the workspace answer questions built from the real ownership, procedures and decisions?"""
+    s = db.get(m.RehearsalSession, session_id)
+    if not s or s.project_id != ctx.pid or s.user_id != ctx.user.id:
+        raise HTTPException(404, "Not found")
+    res = rehearsal.evaluate(db, ctx.project, ctx.user, ctx.org_role)
+    s.turns = [*s.turns, {"evaluation": res}]
+    ledger.append(db, ctx.pid, "rehearsal_evaluated", "rehearsal", s.id, actor=ctx.user.id, new_state={"score": res["score"], "readiness": res["readiness"]}, verification="verified")
+    db.commit()
+    return res
 
 
 @router.get("/rehearsal/{session_id}")
@@ -232,7 +245,7 @@ def rehearsal_get(session_id: str, ctx=Depends(need("incoming")), db: Session = 
 
 @router.get("/skills")
 def skills(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
-    return [{"id": s.id, "user_id": s.user_id, "skill": s.skill, "level": s.level, "source": s.source, "approved": s.approved}
+    return [{"id": s.id, "user_id": s.user_id, "skill": s.skill, "level": s.level, "source": s.source, "approved": s.approved, "profile": s.profile or {}}
             for s in db.query(m.PeopleKnowledge).filter_by(project_id=ctx.pid) if s.approved or ctx.org_role in ("manager", "admin") or s.user_id == ctx.user.id]
 
 
@@ -243,7 +256,9 @@ def add_skill(body: dict, ctx=Depends(need("contributor")), db: Session = Depend
         raise HTTPException(422, "Skill required")
     mgr = ctx.org_role in ("manager", "admin")
     uid_ = body.get("user_id") if mgr and body.get("user_id") else ctx.user.id
-    s = m.PeopleKnowledge(project_id=ctx.pid, user_id=uid_, skill=name, level=str(body.get("level", "working"))[:20], source="self_declared", approved=False)
+    s = m.PeopleKnowledge(project_id=ctx.pid, user_id=uid_, skill=name, level=str(body.get("level", "working"))[:20], source="self_declared", approved=False,
+                        profile={k: [str(x)[:120] for x in (body.get(k) or [])][:20] if isinstance(body.get(k), list) else str(body.get(k) or "")[:500]
+                                 for k in ("prior_systems", "approaches", "training_needs", "recommendations")})
     db.add(s)
     db.commit()
     return {"id": s.id, "approved": False}
@@ -258,5 +273,6 @@ def approve_skill(skill_id: str, ctx=Depends(need("manager")), db: Session = Dep
         raise HTTPException(403, "You cannot approve your own skill")
     s.approved = True
     ledger.append(db, ctx.pid, "skill_approved", "skill", s.id, actor=ctx.user.id, verification="verified")
+    graph.rebuild_graph(db, ctx.pid)  # approved incoming knowledge becomes part of organisational memory
     db.commit()
     return {"ok": True}

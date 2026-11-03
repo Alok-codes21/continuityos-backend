@@ -1,5 +1,6 @@
 """Handover document: 7 sections, every item cites evidence, versions, manager approval, PDF export."""
 import io
+import re
 
 from fastapi import HTTPException
 
@@ -8,7 +9,8 @@ from . import access, graph, ledger, risk
 
 SECTIONS = [("summary", "Summary of responsibilities"), ("ownership", "Ownership and backups"), ("systems", "Systems and dependencies"),
             ("decisions", "Decisions and reasoning"), ("procedures", "Procedures and runbooks"), ("open_work", "Open work and risks"),
-            ("gaps", "Knowledge still missing")]
+            ("gaps", "Knowledge still missing"),
+            ("contacts", "Important contacts"), ("deployment", "Deployment and release instructions"), ("first_actions", "Recommended first actions")]
 
 
 def _evidence(db, claim, role):
@@ -73,6 +75,24 @@ def generate(db, project, person_key_, user, role, incoming_user_id=None, role_p
     for g in db.query(m.KnowledgeGap).filter_by(project_id=project.id, status="open").all():
         if (g.entity_key or "").split(":")[0] in comps:
             add("gaps", g.description, g.found + " " + g.recommended_action, status="missing")
+    # contacts: who else holds each component (derived from qualified-holder links)
+    for r in sim["components"]:
+        if r["remaining_holders"]:
+            add("contacts", f"Contact for {r['component']}", f"Ask {', '.join(r['remaining_holders'])} about {r['component']}.")
+    # deployment: procedure claims that talk about deploy / release / rollback
+    for c in live:
+        d = c.details
+        if c.category == "procedure" and not d.get("draft") and c.status != "missing" and d.get("component") in comps and \
+                re.search(r"(?i)deploy|release|rollback|ship|pipeline|ci/cd", f"{d.get('topic', '')} {c.statement}"):
+            add("deployment", f"{d.get('topic', 'deployment')} for {d.get('component')}", c.statement, c)
+    # first actions: derived from the risks and open gaps found above
+    for r in sim["components"]:
+        if not r["remaining_holders"]:
+            add("first_actions", f"Take ownership of {r['component']}", f"Nobody else is a qualified holder of {r['component']}. Get the owner statement confirmed first.")
+    for it in [i for i in items if i["section"] == "open_work"][:3]:
+        add("first_actions", f"Pick up: {it['title'][:120]}", "Open item assigned to or touching this person.")
+    for it in [i for i in items if i["section"] == "gaps"][:3]:
+        add("first_actions", f"Close gap: {it['title'][:120]}", "Ask the departing person to answer this before they leave.")
     last = db.query(m.Handover).filter_by(project_id=project.id, departing_person_key=p.key).count()
     h = m.Handover(project_id=project.id, departing_person_key=p.key, incoming_user_id=incoming_user_id, role_profile=role_profile,
                    generated_by=user.id, summary={"version": last + 1, "status": "draft", "risk_level": sim["level"],

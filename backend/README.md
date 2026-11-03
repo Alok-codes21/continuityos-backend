@@ -7,5 +7,6 @@ Test: `cd backend && python -m pytest -q`.
 
 Implemented: auth + RBAC, orgs/projects, GitHub and file-upload connectors (others show as unavailable), ingestion with dedupe, secret redaction and prompt-injection flagging, claim ledger (hash chain) with 7 states, knowledge graph, departure impact simulator, interviews, approvals, handover document + PDF, cited Q&A and rehearsal.
 Connectors: GitHub, Slack (selected public channels), Google Drive/Docs (selected folder), file upload. Teams, Zoom, Notion show as unavailable.
-Not yet: Postgres migrations, background sync, incremental cursors, encryption of stored document text at rest.
+Also: per-author consent (withdraw removes data), stored document text encrypted at rest, incremental GitHub sync, scenario-based rehearsal readiness, adaptive interview follow-ups.
+Not yet: Postgres migrations, background sync.
 Demo data: `SEED_ADMIN_PASSWORD=... python -m app.seed` (all content labelled synthetic).
