@@ -10,3 +10,16 @@ Connectors: GitHub, Slack (selected public channels), Google Drive/Docs (selecte
 Also: per-author consent (withdraw removes data), stored document text encrypted at rest, incremental GitHub sync, scenario-based rehearsal readiness, adaptive interview follow-ups.
 Not yet: Postgres migrations, background sync.
 Demo data: `SEED_ADMIN_PASSWORD=... python -m app.seed` (all content labelled synthetic).
+
+## Language
+
+Application-authored responses, errors, interview questions, handover labels,
+comments, documentation, tests and demo data use English. Optional LLM answer
+and follow-up prompts explicitly request plain English. Future commit messages
+should also use English.
+
+Source quotes, uploaded content, user names, questions and answers preserve the
+original text. The backend does not translate these fields, and it does not
+reject non-English user input. A source excerpt can therefore contain another
+language. Generated output from an external model is not a guaranteed language
+filter.
