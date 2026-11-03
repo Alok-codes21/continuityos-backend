@@ -144,3 +144,38 @@ def test_github_partial_sync_when_token_lacks_pr_issue_access():
     c = mk(h)
     recs = c.fetch_records("a/b")
     assert [r.record_type for r in recs] == ["commit"] and len(c.warnings) == 2
+
+
+def test_slack_thread_replies_collected():
+    from app.connectors.slack import SlackConnector
+
+    def h(req):
+        if req.url.path.endswith("conversations.history"):
+            return httpx.Response(200, json={"ok": True, "has_more": False, "messages": [{"type": "message", "user": "U1", "ts": "1767340800.1", "text": "Should we use Redis?", "reply_count": 1}]})
+        if req.url.path.endswith("conversations.replies"):
+            return httpx.Response(200, json={"ok": True, "messages": [{"ts": "1767340800.1", "text": "Should we use Redis?"}, {"user": "U2", "ts": "1767340900.2", "text": "Decision: yes, Redis"}]})
+        return httpx.Response(404)
+    recs = SlackConnector("t", httpx.Client(transport=httpx.MockTransport(h))).fetch_records("C1")
+    assert [r.author for r in recs] == ["U1", "U2"]
+
+
+def test_drive_pagination_follows_next_page_token():
+    from app.connectors.gdrive import GoogleDriveConnector
+    calls = []
+
+    def h(req):
+        p = req.url.path
+        if p.endswith("/export"):
+            return httpx.Response(200, text="doc text " + p.split("/")[-2])
+        calls.append(req.url.params.get("pageToken"))
+        if req.url.params.get("pageToken") == "T2":
+            return httpx.Response(200, json={"files": [{"id": "D2", "name": "b", "mimeType": "application/vnd.google-apps.document"}]})
+        return httpx.Response(200, json={"nextPageToken": "T2", "files": [{"id": "D1", "name": "a", "mimeType": "application/vnd.google-apps.document"}]})
+    recs = GoogleDriveConnector("t", httpx.Client(transport=httpx.MockTransport(h))).fetch_records("F1")
+    assert sorted(r.external_id for r in recs) == ["D1", "D2"] and calls == [None, "T2"]
+
+
+def test_since_is_not_treated_as_decision_reason():
+    from app.services.extract import extract
+    items = extract("Decision: ship the API. We have used it since March.", "document", "t")
+    assert all("March" not in str(i.details.get("reason", "")) for i in items)

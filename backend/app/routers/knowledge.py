@@ -39,7 +39,9 @@ def overview(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     counts = Counter(c.status for c in claims if not c.details.get("draft"))
     live = sum(v for k, v in counts.items() if k not in ("superseded",))
     score = round(100 * sum(WEIGHTS.get(k, 0) * v for k, v in counts.items()) / live) if live else 0
-    decisions = db.query(m.Decision).filter_by(project_id=ctx.pid).order_by(m.Decision.decided_at.desc()).limit(5).all()
+    ok_claims = {c.id for c in access.visible_claims(db, ctx.pid, ctx.org_role)}
+    decisions = [d for d in db.query(m.Decision).filter_by(project_id=ctx.pid).order_by(m.Decision.decided_at.desc())
+                 if not d.claim_id or d.claim_id in ok_claims][:5]
     today = m.now().date()
     days = {(today - timedelta(days=i)): 0 for i in range(13, -1, -1)}
     for r in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == ctx.pid, m.SourceRecord.ingested_at >= m.now() - timedelta(days=14)):

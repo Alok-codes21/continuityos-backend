@@ -58,10 +58,17 @@ class SlackConnector(SourceConnector):
             for msg in d.get("messages", []):
                 if msg.get("type") == "message" and not msg.get("subtype") and msg.get("text"):
                     recs.append(self.normalize_record(msg, source_ref))
+                    if msg.get("reply_count"):
+                        recs.extend(self._replies(source_ref, msg["ts"]))
             next_cursor = (d.get("response_metadata") or {}).get("next_cursor")
             if not d.get("has_more") or not next_cursor:
                 break
         return recs
+
+    def _replies(self, channel, thread_ts):
+        d = self._call("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": self.per_page})
+        return [self.normalize_record(r, channel) for r in d.get("messages", [])
+                if r.get("ts") != thread_ts and not r.get("subtype") and r.get("text")]
 
     def normalize_record(self, raw, source_ref=""):
         ts = raw["ts"]

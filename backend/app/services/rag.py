@@ -31,13 +31,14 @@ def ask(db, project, user, role, question, log_gap=True):
             sc *= 0.4
         if sc < THRESHOLD:
             continue
-        for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).limit(1):
+        for ev in db.query(m.EvidenceLink).filter_by(claim_id=c.id).all():
             if ev.record_id and ev.record_id not in recs:
-                continue
+                continue  # this evidence is restricted/flagged for this role; try the claim's other evidence
             rec = recs.get(ev.record_id)
             cands.append((sc + 0.05, {"claim_id": c.id, "status": c.status, "source": rec.title if rec else "Interview answer",
                                       "location": ev.location, "quote": ev.excerpt, "record_id": ev.record_id},
                           f"{c.statement} ({c.status.replace('_', ' ')})"))
+            break
     for s_, ch in scored[:5]:
         rec = recs[ch.record_id]
         for sent in sentences(ch.text):
@@ -62,7 +63,17 @@ def ask(db, project, user, role, question, log_gap=True):
         return {"answer": NO_ANSWER, "citations": [], "answered": False}
     text = " ".join(parts)
     llm_text = llm.rephrase(q, [c["quote"] for c in citations]) if llm.available() else None
+    if llm_text:  # LLM wording is only used when it adds no digits or capitalised names absent from the cited excerpts
+        import re
+        ev_text = " ".join(c["quote"] for c in citations) + " " + question_words(q)
+        new_tokens = set(re.findall(r"\b\d+\b|\b[A-Z][a-z]{2,}\b", llm_text)) - set(re.findall(r"\b\d+\b|\b[A-Z][a-z]{2,}\b", ev_text)) - {"The", "Based", "According", "This", "That", "Yes", "Not"}
+        if new_tokens:
+            llm_text = None
     return {"answer": llm_text or text, "citations": citations, "answered": True, "llm_used": bool(llm_text)}
+
+
+def question_words(q):
+    return q
 
 
 def _log_gap(db, project, user, q):

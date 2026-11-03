@@ -54,7 +54,17 @@ class GoogleDriveConnector(SourceConnector):
         q = f"'{source_ref}' in parents and trashed=false and (mimeType='{DOC}' or mimeType='text/plain')"
         if since:
             q += f" and modifiedTime > '{since.isoformat()}Z'"
-        d = self._get("/files", {"q": q, "fields": "files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName))", "pageSize": self.max_files})
+        files, token = [], None
+        for _ in range(5):
+            params = {"q": q, "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName))", "pageSize": self.max_files}
+            if token:
+                params["pageToken"] = token
+            d = self._get("/files", params)
+            files.extend(d.get("files", []))
+            token = d.get("nextPageToken")
+            if not token or len(files) >= self.max_files:
+                break
+        d = {"files": files[: self.max_files]}
         recs, self.warnings = [], []
         for f in d.get("files", []):
             try:
