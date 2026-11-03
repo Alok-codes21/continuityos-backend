@@ -35,11 +35,11 @@ def _org(org_id, db, user, min_role):
         raise HTTPException(403, f"Requires {min_role} role")
 
 
-SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
+SCOPE_TYPES = {"code_files": ("code_file",), "commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
                "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
 CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "google_drive": ["documents"], "manual_upload": ["documents"]}
 # which scopes each connector may hold; anything else is rejected
-CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners", "documents"},
+CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners", "documents", "code_files"},
                     "slack": {"messages"}, "google_drive": {"documents"}, "manual_upload": {"documents"}}
 
 

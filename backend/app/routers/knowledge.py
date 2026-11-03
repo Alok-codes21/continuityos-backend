@@ -269,13 +269,13 @@ def rehearsal_get(session_id: str, ctx=Depends(need("incoming")), db: Session = 
 
 
 @router.get("/skills")
-def skills(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+def skills(ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     return [{"id": s.id, "user_id": s.user_id, "skill": s.skill, "level": s.level, "source": s.source, "approved": s.approved, "profile": s.profile or {}}
             for s in db.query(m.PeopleKnowledge).filter_by(project_id=ctx.pid) if s.approved or ctx.org_role in ("manager", "admin") or s.user_id == ctx.user.id]
 
 
 @router.post("/skills", status_code=201)
-def add_skill(body: dict, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+def add_skill(body: dict, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     name = str(body.get("skill", "")).strip()[:100]
     if not name:
         raise HTTPException(422, "Skill required")

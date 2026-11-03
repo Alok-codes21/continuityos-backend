@@ -108,7 +108,7 @@ class GitHubConnector(SourceConnector):
                 break
             except ConnectorError:
                 continue
-        if self.file_paths and (self.allowed_types is None or "document" in self.allowed_types):
+        if self.file_paths and (self.allowed_types is None or {"document", "code_file"} & self.allowed_types):
             recs.extend(self._fetch_files(source_ref))
         recs = [r for r in recs if not until or not r.occurred_at or r.occurred_at <= until]
         return recs
@@ -117,6 +117,11 @@ class GitHubConnector(SourceConnector):
         p = PurePosixPath(path)
         if p.suffix.lower() in {".md", ".rst", ".txt"} and (p.name.lower().startswith("readme") or "docs" in p.parts):
             return "document"
+        excluded = {"node_modules", ".git", ".venv", "venv", "vendor", "dist", "build", "__pycache__"}
+        if any(part in excluded or part.startswith(".env") for part in p.parts):
+            return None
+        if p.suffix.lower() in {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rb", ".rs", ".cs", ".c", ".h", ".cpp"}:
+            return "code_file"
         return None
 
     def _fetch_files(self, source_ref):
@@ -165,7 +170,7 @@ class GitHubConnector(SourceConnector):
                 items.append(NormalizedRecord("github", f"{source_ref}:{path}", kind, path,
                     f"File: {path}\n{text}", None, data.get("html_url"),
                     _dt(head["commit"].get("committer", {}).get("date")), source_ref,
-                    {"path": path, "blob_sha": ent.get("sha"), "commit_sha": ref}))
+                    {"path": path, "repository": source_ref, "blob_sha": ent.get("sha"), "commit_sha": ref}))
             return items
         except ConnectorRateLimited:
             raise

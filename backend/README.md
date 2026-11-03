@@ -41,3 +41,31 @@ binary/non-UTF-8 files and unsupported types are excluded. Partial fetches repor
 warnings; truncated fetches do not advance the sync cursor. Files use the normal
 redaction, permission, extraction, deduplication, version and citation pipeline.
 These are current file snapshots, not per-file change history or deletion tracking.
+
+## Selected code-file snapshots
+
+GitHub integration permission `code_files` is separate from `documents` and
+legacy `repo`. Choose source-relative `file_paths` such as `["src/*.py"]` using
+the same source/selection endpoints. File paths, extension allowlists and the
+same file/byte limits apply; no repository files are executed or imported.
+Supported extensions: .py, .js, .jsx, .ts, .tsx, .go, .java, .rb, .rs, .cs, .c,
+.h and .cpp. Common vendor/build directories, symlinks and submodules are skipped.
+
+Python uses the standard-library AST to extract declared classes/functions and
+static imports. Other supported languages use limited declaration/import text
+patterns, not full language parsers. File paths create module components; imports
+create inferred dependencies and declared symbols link to the module. Explicit
+owner/maintainer comments become inferred `possible_owner` hints, never qualified
+ownership. Existing CODEOWNERS remains the documented ownership source.
+
+Limits: no execution, runtime call graph, dynamic import resolution, cross-file
+symbol resolution or guaranteed architecture understanding. Old snapshots and
+claims are retained; removed symbols/files are not automatically retired. Code
+snapshots have no reliable author attribution; opt-in consent mode blocks these
+records rather than silently assuming consent. Existing document records retain
+the current document opt-in exemption. The API can reject content types or paths
+before fetch/ingestion but does not reproduce every provider ACL inside the app.
+
+Incoming users may now submit their own skill/profile records and view their
+own pending records; a different manager must approve them. This does not grant
+incoming users access to source administration or other contributors' drafts.

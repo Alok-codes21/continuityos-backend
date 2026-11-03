@@ -128,6 +128,13 @@ def rebuild_graph(db, pid):
             p, cn = ensure_person(db, pid, d["person"]), comp_node(d["component"])
             if cn:
                 edge(p, cn, "verified_holds" if c.category == "holder" else "backup_owner", ver, c)
+        elif c.category == "code_symbol":
+            node = ensure_node(db, pid, "code_symbol", c.subject_key, d["symbol"], {"kind": d.get("kind"), "path": d.get("path")})
+            if comp_node(d["component"]):
+                edge(node, comp_node(d["component"]), "declared_in", ver, c)
+        elif c.category == "owner_hint":
+            if comp_node(d["component"]):
+                edge(ensure_person(db, pid, d["person"]), comp_node(d["component"]), "possible_owner", "inferred", c)
         elif c.category == "contribution":
             p, cn = ensure_person(db, pid, d["person"]), comp_node(d["component"])
             if cn:

@@ -78,6 +78,9 @@ def _title_component(title: str, content: str):
 
 def extract(record_type: str, title: str, content: str, author: str = None, meta: dict = None):
     """Return list[Item]. Source-level facts (record id, author, date) are attached by the caller."""
+    if record_type == "code_file":
+        from .code_extract import extract_code
+        return extract_code(title, content, meta)
     meta = meta or {}
     items = []
     seen = set()
