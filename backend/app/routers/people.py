@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models as m
 from ..db import get_db
 from ..security import audit, need
-from ..services import handover, interview
+from ..services import handover, interview, ledger
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["people"])
 
@@ -181,4 +181,7 @@ def req_approval(handover_id: str, ctx=Depends(need("manager")), db: Session = D
 def get_pdf(handover_id: str, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     h = _h(db, ctx, handover_id)
     data = handover.pdf(db, h, ctx.project.name)
+    ledger.append(db, ctx.pid, "handover_downloaded", "handover", h.id, actor=ctx.user.id, verification="verified")
+    audit(db, "handover_pdf_downloaded", ctx.user, ctx.org_id, ctx.pid, "handover", h.id)
+    db.commit()
     return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="handover-{h.departing_person_key}.pdf"'})
