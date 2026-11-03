@@ -193,6 +193,7 @@ class AskIn(BaseModel):
 @router.post("/ask")
 def ask(body: AskIn, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     r = rag.ask(db, ctx.project, ctx.user, ctx.org_role, body.question)
+    audit(db, "ai_retrieval", ctx.user, ctx.org_id, ctx.pid, answered=r["answered"], citations=len(r["citations"]))
     db.commit()
     return r
 

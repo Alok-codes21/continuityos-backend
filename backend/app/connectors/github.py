@@ -4,7 +4,7 @@ from datetime import datetime
 
 import httpx
 
-from .base import (ConnectorError, ConnectorRateLimited, NormalizedRecord, SourceConnector)
+from .base import (ConnectorError, ConnectorForbidden, ConnectorRateLimited, NormalizedRecord, SourceConnector)
 
 API = "https://api.github.com"
 
@@ -23,6 +23,7 @@ class GitHubConnector(SourceConnector):
     def __init__(self, token: str = "", client: httpx.Client = None):
         self.token = token
         self.client = client or httpx.Client(timeout=20)
+        self.warnings = []
 
     def authenticate(self, credentials):
         self.token = credentials.get("token", "")
@@ -37,6 +38,8 @@ class GitHubConnector(SourceConnector):
             raise ConnectorError("GitHub rejected the token")
         if r.status_code == 404:
             raise ConnectorError("Not found or token has no access")
+        if r.status_code == 403:
+            raise ConnectorForbidden("Token lacks permission for this resource")
         if r.status_code >= 400:
             raise ConnectorError(f"GitHub error {r.status_code}")
         return r.json()
@@ -61,14 +64,17 @@ class GitHubConnector(SourceConnector):
     def fetch_records(self, source_ref, cursor=None, since=None, until=None):
         p = {"since": since.isoformat() + "Z"} if since else {}
         recs = []
-        for c in self._paged(f"/repos/{source_ref}/commits", p):
-            recs.append(self.normalize_record({"_k": "commit", **c}, source_ref))
-        for pr in self._paged(f"/repos/{source_ref}/pulls", {"state": "all"}):
-            recs.append(self.normalize_record({"_k": "pull_request", **pr}, source_ref))
-        for i in self._paged(f"/repos/{source_ref}/issues", {"state": "all", **p}):
-            if "pull_request" in i:
+        self.warnings = []
+        for kind, path, params in (("commit", "commits", p), ("pull_request", "pulls", {"state": "all"}), ("issue", "issues", {"state": "all", **p})):
+            try:
+                items = self._paged(f"/repos/{source_ref}/{path}", params)
+            except ConnectorForbidden:
+                self.warnings.append(f"{path}: token has no permission, skipped")
                 continue
-            recs.append(self.normalize_record({"_k": "issue", **i}, source_ref))
+            for it in items:
+                if kind == "issue" and "pull_request" in it:
+                    continue
+                recs.append(self.normalize_record({"_k": kind, **it}, source_ref))
         for path in ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"):
             try:
                 f = self._get(f"/repos/{source_ref}/contents/{path}")

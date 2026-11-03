@@ -7,6 +7,10 @@ class ConnectorError(Exception):
     pass
 
 
+class ConnectorForbidden(ConnectorError):
+    pass
+
+
 class ConnectorUnavailable(ConnectorError):
     pass
 

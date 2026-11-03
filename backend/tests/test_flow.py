@@ -323,3 +323,28 @@ def test_member_correction_and_identity_merge(client):
     assert client.get(f"/api/projects/{pid}/claims/{cl['id']}", headers=H(admin["token"])).json()["status"] == "verified"
     r = client.post(f"/api/projects/{pid}/graph/people/merge", json={"keep": "priyasharma", "merge": "nobody"}, headers=H(gargi["token"]))
     assert r.status_code == 404
+
+
+def test_delete_all_records_of_a_source_and_retrieval_audit(client, monkeypatch):
+    from datetime import datetime
+    from app.connectors import catalog
+    from app.connectors.base import NormalizedRecord, SourceConnector
+
+    class Fake(SourceConnector):
+        def __init__(self, token=""): pass
+        def validate_permissions(self): return {}
+        def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+            return [NormalizedRecord("github", "c1", "commit", "t", "fix payments-service retry", "priyasharma", None, datetime(2026, 1, 2), source_ref)]
+
+    monkeypatch.setattr(catalog, "get_connector", lambda name, token="", client=None: Fake(token))
+    a = register(client, "d@x.io", "D")
+    org, pid, t = a["org_id"], a["project_id"], a["token"]
+    iid = client.post(f"/api/orgs/{org}/integrations", json={"connector": "github", "token": "tok", "consent": True}, headers=H(t)).json()["id"]
+    sid = client.post(f"/api/projects/{pid}/sources", json={"integration_id": iid, "source_ref": "a/b"}, headers=H(t)).json()["id"]
+    assert client.post(f"/api/projects/{pid}/sources/{sid}/sync", headers=H(t)).json()["stored"] == 1
+    r = client.delete(f"/api/projects/{pid}/sources/{sid}/records", headers=H(t)).json()
+    assert r["records_deleted"] == 1
+    assert client.get(f"/api/projects/{pid}/records", headers=H(t)).json() == []
+    client.post(f"/api/projects/{pid}/ask", json={"question": "who owns billing"}, headers=H(t))
+    acts = [e["action"] for e in client.get(f"/api/orgs/{org}/audit", headers=H(t)).json()]
+    assert "source_records_deleted" in acts and "ai_retrieval" in acts

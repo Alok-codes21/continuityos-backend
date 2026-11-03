@@ -6,5 +6,6 @@ Run: `cd backend && pip install -r requirements.txt && uvicorn app.main:app --re
 Test: `cd backend && python -m pytest -q`.
 
 Implemented: auth + RBAC, orgs/projects, GitHub and file-upload connectors (others show as unavailable), ingestion with dedupe, secret redaction and prompt-injection flagging, claim ledger (hash chain) with 7 states, knowledge graph, departure impact simulator, interviews, approvals, handover document + PDF, cited Q&A and rehearsal.
-Not yet: Slack and other connectors, Postgres migrations, background sync.
+Connectors: GitHub, Slack (selected public channels), Google Drive/Docs (selected folder), file upload. Teams, Zoom, Notion show as unavailable.
+Not yet: Postgres migrations, background sync, incremental cursors, encryption of stored document text at rest.
 Demo data: `SEED_ADMIN_PASSWORD=... python -m app.seed` (all content labelled synthetic).

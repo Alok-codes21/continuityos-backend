@@ -196,6 +196,8 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
         db.commit()
         raise HTTPException(502, "Source fetch failed")
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job)
+    if getattr(conn, "warnings", None):
+        job.error = "partial: " + "; ".join(conn.warnings)[:450]
     s.last_cursor = datetime.utcnow().isoformat()
     audit(db, "source_synced", ctx.user, ctx.org_id, ctx.pid, "source", s.id, stored=job.stored)
     db.commit()
@@ -272,11 +274,7 @@ def record(record_id: str, ctx=Depends(need("contributor")), db: Session = Depen
     return _rec_dict(r, True)
 
 
-@router.delete("/projects/{project_id}/records/{record_id}")
-def delete_record(record_id: str, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
-    r = db.get(m.SourceRecord, record_id)
-    if not r or r.project_id != ctx.pid:
-        raise HTTPException(404, "Not found")
+def _purge(db, ctx, r):
     removed_claims = 0
     for ev in db.query(m.EvidenceLink).filter_by(record_id=r.id).all():
         cid = ev.claim_id
@@ -291,8 +289,30 @@ def delete_record(record_id: str, ctx=Depends(need("manager")), db: Session = De
     ledger.append(db, ctx.pid, "record_deleted", "record", r.id, actor=ctx.user.id, new_state={"claims_removed": removed_claims}, verification="verified")
     db.delete(r)
     db.flush()
+    return removed_claims
+
+
+@router.delete("/projects/{project_id}/records/{record_id}")
+def delete_record(record_id: str, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    r = db.get(m.SourceRecord, record_id)
+    if not r or r.project_id != ctx.pid:
+        raise HTTPException(404, "Not found")
+    removed = _purge(db, ctx, r)
     claims_engine.reconcile(db, ctx.pid)
     graph.rebuild_graph(db, ctx.pid)
     audit(db, "record_deleted", ctx.user, ctx.org_id, ctx.pid, "record", record_id)
     db.commit()
-    return {"ok": True, "claims_removed": removed_claims}
+    return {"ok": True, "claims_removed": removed}
+
+
+@router.delete("/projects/{project_id}/sources/{source_id}/records")
+def delete_source_records(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    """Deletion request / consent withdrawal: removes everything previously ingested from one source."""
+    s = _source(db, ctx, source_id)
+    recs = db.query(m.SourceRecord).filter_by(project_id=ctx.pid, source_id=s.id).all()
+    removed = sum(_purge(db, ctx, r) for r in recs)
+    claims_engine.reconcile(db, ctx.pid)
+    graph.rebuild_graph(db, ctx.pid)
+    audit(db, "source_records_deleted", ctx.user, ctx.org_id, ctx.pid, "source", s.id, records=len(recs))
+    db.commit()
+    return {"ok": True, "records_deleted": len(recs), "claims_removed": removed}
