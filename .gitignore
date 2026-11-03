@@ -1,5 +1,35 @@
+
+# Environment and secrets
 .env
-*.db
+.env.*
+!.env.example
+
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing and coverage
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Frontend dependencies
 node_modules/
+
+# Build output
+dist/
+build/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
