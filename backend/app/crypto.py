@@ -34,4 +34,23 @@ class EncryptedText(TypeDecorator):
         try:
             return fernet().decrypt(value[len(PREFIX):].encode()).decode()
         except InvalidToken:
-            return ""
+            raise ValueError("Stored text could not be decrypted; check the encryption key and data integrity") from None
+
+
+class EncryptedJSON(EncryptedText):
+    """Encrypted JSON with backward-compatible reads of legacy JSON text."""
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        import json
+        if value is None:
+            return None
+        return super().process_bind_param(json.dumps(value, sort_keys=True), dialect)
+
+    def process_result_value(self, value, dialect):
+        import json
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        return json.loads(super().process_result_value(value, dialect))

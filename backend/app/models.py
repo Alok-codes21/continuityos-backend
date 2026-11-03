@@ -7,7 +7,7 @@ from sqlalchemy import (Boolean, DateTime, ForeignKey, Integer, String, Text,
                         UniqueConstraint, Index, JSON)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .crypto import EncryptedText
+from .crypto import EncryptedJSON, EncryptedText
 from .db import Base
 
 
@@ -153,7 +153,7 @@ class SourceRecord(Base):
     source_type: Mapped[str] = mapped_column(String(40))
     external_id: Mapped[str] = mapped_column(String(300))
     record_type: Mapped[str] = mapped_column(String(40))  # commit | pull_request | issue | document | message
-    title: Mapped[str] = mapped_column(String(500), default="")
+    title: Mapped[str] = mapped_column(EncryptedText, default="")
     content: Mapped[str] = mapped_column(EncryptedText)
     author: Mapped[str] = mapped_column(String(200), nullable=True)
     url: Mapped[str] = mapped_column(String(500), nullable=True)
@@ -199,7 +199,7 @@ class PeopleKnowledge(Base):
     level: Mapped[str] = mapped_column(String(20), default="working")
     source: Mapped[str] = mapped_column(String(30), default="self_reported")
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
-    profile: Mapped[dict] = mapped_column(JSON, default=dict)  # prior systems, approaches, training needs, recommendations
+    profile: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)  # prior systems, approaches, training needs, recommendations
 
 
 class Component(Base):
@@ -221,8 +221,8 @@ class Claim(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     category: Mapped[str] = mapped_column(String(30), index=True)  # decision, task, bug, risk, api, owner, dependency, procedure, question, ...
     subject_key: Mapped[str] = mapped_column(String(300), index=True)
-    statement: Mapped[str] = mapped_column(Text)
-    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    statement: Mapped[str] = mapped_column(EncryptedText)
+    details: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="inferred")
     # verified | evidence_backed | inferred | conflicting | missing | outdated | superseded
     freshness: Mapped[str] = mapped_column(String(20), default="current")  # current | stale | superseded | unknown
@@ -238,7 +238,7 @@ class EvidenceLink(Base):
     id: Mapped[str] = col_id("evd")
     claim_id: Mapped[str] = mapped_column(ForeignKey("knowledge_claims.id", ondelete="CASCADE"), index=True)
     record_id: Mapped[str] = mapped_column(String(40), nullable=True)
-    excerpt: Mapped[str] = mapped_column(Text, default="")
+    excerpt: Mapped[str] = mapped_column(EncryptedText, default="")
     location: Mapped[str] = mapped_column(String(100), default="")
     quote_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     interview_response_id: Mapped[str] = mapped_column(String(40), nullable=True)
@@ -274,8 +274,8 @@ class GraphNode(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     node_type: Mapped[str] = mapped_column(String(30))
     key: Mapped[str] = mapped_column(String(300))
-    name: Mapped[str] = mapped_column(String(300))
-    props: Mapped[dict] = mapped_column(JSON, default=dict)
+    name: Mapped[str] = mapped_column(EncryptedText)
+    props: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     user_id: Mapped[str] = mapped_column(String(40), nullable=True)
 
 
@@ -296,7 +296,7 @@ class Task(Base):
     __tablename__ = "tasks"
     id: Mapped[str] = col_id("tsk")
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str] = mapped_column(EncryptedText)
     assignee_key: Mapped[str] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open")
     record_id: Mapped[str] = mapped_column(String(40), nullable=True)
@@ -307,11 +307,11 @@ class Decision(Base):
     id: Mapped[str] = col_id("dec")
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     claim_id: Mapped[str] = mapped_column(String(40), nullable=True)
-    title: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str] = mapped_column(EncryptedText)
     decided_by: Mapped[str] = mapped_column(String(200), nullable=True)
-    participants: Mapped[list] = mapped_column(JSON, default=list)
-    alternatives: Mapped[list] = mapped_column(JSON, default=list)
-    rationale: Mapped[str] = mapped_column(Text, default="")
+    participants: Mapped[list] = mapped_column(EncryptedJSON, default=list)
+    alternatives: Mapped[list] = mapped_column(EncryptedJSON, default=list)
+    rationale: Mapped[str] = mapped_column(EncryptedText, default="")
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | superseded
     superseded_by: Mapped[str] = mapped_column(String(40), nullable=True)
     decided_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -325,10 +325,10 @@ class KnowledgeGap(Base):
     gap_type: Mapped[str] = mapped_column(String(30))  # no_documented_owner | missing_procedure | undocumented_decision | unresolved_bug | unanswered_question
     entity_type: Mapped[str] = mapped_column(String(30), nullable=True)
     entity_key: Mapped[str] = mapped_column(String(300), nullable=True)
-    description: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(EncryptedText)
     status: Mapped[str] = mapped_column(String(20), default="open")  # open | resolved | unresolved_accepted
-    found: Mapped[str] = mapped_column(Text, default="")
-    recommended_action: Mapped[str] = mapped_column(Text, default="")
+    found: Mapped[str] = mapped_column(EncryptedText, default="")
+    recommended_action: Mapped[str] = mapped_column(EncryptedText, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -337,9 +337,9 @@ class RiskRecord(Base):
     id: Mapped[str] = col_id("rsk")
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     simulation_person_key: Mapped[str] = mapped_column(String(300), nullable=True)
-    title: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str] = mapped_column(EncryptedText)
     level: Mapped[str] = mapped_column(String(20))
-    explanation: Mapped[dict] = mapped_column(JSON, default=dict)
+    explanation: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -360,8 +360,8 @@ class InterviewQuestion(Base):
     interview_id: Mapped[str] = mapped_column(ForeignKey("handover_interviews.id", ondelete="CASCADE"), index=True)
     gap_id: Mapped[str] = mapped_column(String(40), nullable=True)
     parent_question_id: Mapped[str] = mapped_column(String(40), nullable=True)
-    question: Mapped[str] = mapped_column(Text)
-    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    question: Mapped[str] = mapped_column(EncryptedText)
+    context: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="open")  # open | answered | unresolved
     position: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -371,7 +371,7 @@ class InterviewResponse(Base):
     id: Mapped[str] = col_id("irs")
     interview_id: Mapped[str] = mapped_column(ForeignKey("handover_interviews.id", ondelete="CASCADE"), index=True)
     question_id: Mapped[str] = mapped_column(ForeignKey("interview_questions.id", ondelete="CASCADE"), index=True)
-    answer: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(EncryptedText)
     claim_id: Mapped[str] = mapped_column(String(40), nullable=True)
     employee_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     manager_approved: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -385,7 +385,7 @@ class Approval(Base):
     kind: Mapped[str] = mapped_column(String(30))  # interview_response | correction | skill_profile | handover_doc | scope_change
     target_id: Mapped[str] = mapped_column(String(40))
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | approved | rejected
-    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     requested_by: Mapped[str] = mapped_column(String(40))
     decided_by: Mapped[str] = mapped_column(String(40), nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
@@ -401,7 +401,7 @@ class Handover(Base):
     incoming_user_id: Mapped[str] = mapped_column(String(40), nullable=True)
     role_profile: Mapped[str] = mapped_column(String(30), default="backend")
     generated_by: Mapped[str] = mapped_column(String(40))
-    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -410,11 +410,11 @@ class HandoverItem(Base):
     id: Mapped[str] = col_id("hit")
     handover_id: Mapped[str] = mapped_column(ForeignKey("handovers.id", ondelete="CASCADE"), index=True)
     section: Mapped[str] = mapped_column(String(40))
-    title: Mapped[str] = mapped_column(String(500))
-    body: Mapped[str] = mapped_column(Text, default="")
+    title: Mapped[str] = mapped_column(EncryptedText)
+    body: Mapped[str] = mapped_column(EncryptedText, default="")
     status: Mapped[str] = mapped_column(String(20), default="inferred")
     claim_id: Mapped[str] = mapped_column(String(40), nullable=True)
-    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(EncryptedJSON, default=list)
 
 
 class RehearsalSession(Base):
@@ -422,7 +422,7 @@ class RehearsalSession(Base):
     id: Mapped[str] = col_id("reh")
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[str] = mapped_column(String(40), index=True)
-    turns: Mapped[list] = mapped_column(JSON, default=list)
+    turns: Mapped[list] = mapped_column(EncryptedJSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

@@ -59,7 +59,7 @@ def ask(db, project, user, role, question, log_gap=True):
             break
     if not citations:
         if log_gap:
-            _log_gap(db, project, user, q)
+            _log_gap(db, project, user, q, role)
         return {"answer": NO_ANSWER, "citations": [], "answered": False}
     text = " ".join(parts)
     llm_text = llm.rephrase(q, [c["quote"] for c in citations]) if llm.available() else None
@@ -93,14 +93,14 @@ def _supported(answer, citations):
     return True
 
 
-def _log_gap(db, project, user, q):
+def _log_gap(db, project, user, q, role):
     key = "question:" + q.lower()[:80]
     if not db.query(m.KnowledgeGap).filter_by(project_id=project.id, gap_type="unanswered_question", entity_key=key).first():
         db.add(m.KnowledgeGap(project_id=project.id, gap_type="unanswered_question", entity_type="question", entity_key=key,
                               description=f"Question could not be answered: {q[:150]}", found="No accessible evidence matched.",
                               recommended_action="Ask the relevant owner and record the answer."))
     if not db.query(m.Claim).filter_by(project_id=project.id, subject_key=key, status="missing").first():
-        c = m.Claim(project_id=project.id, category="question_missing", subject_key=key, statement=q[:300], details={"question": q}, status="missing",
+        c = m.Claim(project_id=project.id, category="question_missing", subject_key=key, statement=q[:300], details={"question": q, "asker_role": role}, status="missing",
                     created_by="system:missing")
         db.add(c)
         db.flush()

@@ -45,6 +45,7 @@ def _sig(text):
 def reconcile(db, project_id, now_=None):
     now_ = now_ or m.now()
     claims = db.query(m.Claim).filter(m.Claim.project_id == project_id).all()
+    previous = {c.id: (c.status, c.freshness, c.superseded_by) for c in claims}
     live = [c for c in claims if not c.details.get("manual_status") and not c.created_by.startswith("system:missing")]
 
     # 1. reset derived states of system claims that humans have not verified
@@ -115,7 +116,7 @@ def reconcile(db, project_id, now_=None):
             rec = db.get(m.SourceRecord, ev.record_id) if ev.record_id else None
             if not rec or not ev.excerpt:
                 continue
-            newest = (db.query(m.SourceRecord).filter_by(project_id=project_id, source_type=rec.source_type, external_id=rec.external_id)
+            newest = (db.query(m.SourceRecord).filter_by(project_id=project_id, source_id=rec.source_id, source_type=rec.source_type, external_id=rec.external_id)
                       .order_by(m.SourceRecord.version.desc()).first())
             ra = c.details.get("reverified_at")
             if ra and newest and str(ra) >= newest.ingested_at.isoformat():
@@ -128,6 +129,14 @@ def reconcile(db, project_id, now_=None):
                     c.status, c.freshness = "outdated", "stale"
                     c.details = {**c.details, "source_changed": True}
                 break
+    from . import access
+    for c in claims:
+        current = (c.status, c.freshness, c.superseded_by)
+        if current != previous[c.id]:
+            keys = ("status", "freshness", "superseded_by")
+            ledger.append(db, project_id, "claim_state_changed", "claim", c.id, actor="system",
+                          previous_state=dict(zip(keys, previous[c.id])), new_state=dict(zip(keys, current)),
+                          verification=c.status, permission=access.claim_level(db, c))
     db.flush()
     return rebuild_gaps(db, project_id)
 
@@ -135,7 +144,7 @@ def reconcile(db, project_id, now_=None):
 def _claims(db, project_id, category, statuses=None):
     q = db.query(m.Claim).filter_by(project_id=project_id, category=category)
     cs = q.all()
-    return [c for c in cs if statuses is None or c.status in statuses]
+    return [c for c in cs if not c.details.get("draft") and (statuses is None or c.status in statuses)]
 
 
 def rebuild_gaps(db, project_id):
@@ -187,7 +196,7 @@ def rebuild_gaps(db, project_id):
                 g.status = "open"
             for f, v in desired[k].items():
                 setattr(g, f, v)
-        elif g.status == "open":
+        elif g.status == "open" and g.gap_type != "unanswered_question":
             g.status = "resolved"
     for (gt, ek), d in desired.items():
         if (gt, ek) not in existing:
@@ -213,7 +222,19 @@ def rebuild_gaps(db, project_id):
             db.flush()
             ledger.append(db, project_id, "knowledge_missing", "claim", c.id, actor="system", new_state={"status": "missing"}, verification="missing")
     for key, c in missing_existing.items():
-        if key not in wanted_missing:
+        if key not in wanted_missing and c.category != "question_missing":
             db.delete(c)
+    # Re-evaluate only the explicitly logged questions. Use the original role
+    # and never log another gap while checking an existing one.
+    from . import rag
+    project = db.get(m.Project, project_id)
+    for c in db.query(m.Claim).filter_by(project_id=project_id, category="question_missing").all():
+        if not c.created_by.startswith("system:missing"):
+            continue
+        answered = rag.ask(db, project, None, c.details.get("asker_role", "contributor"), c.details.get("question", c.statement), log_gap=False)["answered"]
+        g = db.query(m.KnowledgeGap).filter_by(project_id=project_id, gap_type="unanswered_question", entity_key=c.subject_key).first()
+        if g:
+            g.status = "resolved" if answered else "open"
+        c.status = "superseded" if answered else "missing"
     db.flush()
-    return {"gaps_open": sum(1 for _ in desired)}
+    return {"gaps_open": db.query(m.KnowledgeGap).filter_by(project_id=project_id, status="open").count()}

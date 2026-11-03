@@ -87,7 +87,8 @@ def test_secret_redaction_and_dedupe(client):
     body = client.get(f"/api/projects/{pid}/records/{rid}", headers=H(t)).json()["content"]
     assert "hunter2hunter2" not in body and "sk_live_abcdefghijklmnopqrstuvwx" not in body and "priya@acme.io" not in body
     again = up(client, t, pid, "cfg-copy.md", SECRET).json()
-    assert again["duplicates"] == 1 and again["stored"] == 0
+    assert again["duplicates"] == 0 and again["stored"] == 1  # distinct filename keeps provenance
+    assert up(client, t, pid, "cfg-copy.md", SECRET).json()["duplicates"] == 1
 
 
 def test_injection_flagged_not_extracted(client):

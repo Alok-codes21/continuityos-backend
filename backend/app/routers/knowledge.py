@@ -69,7 +69,7 @@ def claims(status: str | None = None, category: str | None = None, q: str | None
 @router.get("/claims/{claim_id}")
 def claim(claim_id: str, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     d = claim_dict(db, c, ctx.org_role, True)
     d["history"] = [{"seq": e.seq, "type": e.event_type, "at": e.occurred_at.isoformat(), "verification": e.verification}
@@ -85,7 +85,7 @@ class CorrectionIn(BaseModel):
 @router.post("/claims/{claim_id}/corrections", status_code=201)
 def correct(claim_id: str, body: CorrectionIn, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     ap = m.Approval(project_id=ctx.pid, kind="member_correction", target_id=c.id, status="pending", requested_by=ctx.user.id,
                     payload={"claim_id": c.id, "corrected_statement": body.corrected_statement, "reason": body.reason, "original": c.statement})
@@ -104,7 +104,7 @@ def needs_reverification(ctx=Depends(need("manager")), db: Session = Depends(get
 def reverify(claim_id: str, body: dict | None = None, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     """A manager confirms a stale or source-changed verified claim is still true. Someone who wrote the claim cannot re-verify it."""
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     if c.status != "verified":
         raise HTTPException(409, "Only verified claims are re-verified; others go through the approval flow")

@@ -230,6 +230,11 @@ def rebuild_graph(db, pid):
             edge(ensure_node(db, pid, "decision", newer.subject_key, newer.statement[:80]),
                  ensure_node(db, pid, "decision", c.subject_key, c.statement[:80]), "supersedes", "evidence_backed", c)
     db.flush()
+    linked = {e.src_id for e in db.query(m.GraphEdge).filter_by(project_id=pid)} | {e.dst_id for e in db.query(m.GraphEdge).filter_by(project_id=pid)}
+    for node in db.query(m.GraphNode).filter_by(project_id=pid).all():
+        if node.id not in linked and node.node_type != "project" and not node.user_id:
+            db.delete(node)
+    db.flush()
 
 
 def nx_graph(db, pid):

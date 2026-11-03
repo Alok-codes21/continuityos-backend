@@ -333,13 +333,41 @@ def _purge(db, ctx, r):
         db.delete(ev)
         db.flush()
         c = db.get(m.Claim, cid)
-        if c and not db.query(m.EvidenceLink).filter_by(claim_id=cid).count() and c.status != "verified":
+        if c and not db.query(m.EvidenceLink).filter_by(claim_id=cid).count():
+            db.query(m.Decision).filter_by(claim_id=cid).delete()
+            db.query(m.Approval).filter_by(project_id=ctx.pid, target_id=cid).delete()
             db.delete(c)
             removed_claims += 1
+        elif c:
+            # Derived metadata from the removed source must not survive on a
+            # claim supported independently elsewhere.
+            c.details = {k: v for k, v in c.details.items() if k not in ("source_title", "source_type", "author", "participants")}
+    db.query(m.Task).filter_by(record_id=r.id).delete()
+    db.query(m.Decision).filter_by(record_id=r.id).delete()
+    # Materialized snapshots can contain deleted excerpts. Invalidate rather
+    # than pretend they remain safe/current after consent withdrawal.
+    for h in db.query(m.Handover).filter_by(project_id=ctx.pid).all():
+        db.query(m.HandoverItem).filter_by(handover_id=h.id).delete()
+        db.query(m.Approval).filter_by(project_id=ctx.pid, target_id=h.id).delete()
+        db.delete(h)
+    db.query(m.RehearsalSession).filter_by(project_id=ctx.pid).delete()
+    db.query(m.RiskRecord).filter_by(project_id=ctx.pid).delete()
+    db.query(m.KnowledgeGap).filter(m.KnowledgeGap.project_id == ctx.pid, m.KnowledgeGap.gap_type != "unanswered_question").delete()
     db.query(m.DocumentChunk).filter_by(record_id=r.id).delete()
     db.query(m.Document).filter_by(record_id=r.id).delete()
     ledger.append(db, ctx.pid, "record_deleted", "record", r.id, actor=ctx.user.id, new_state={"claims_removed": removed_claims}, verification="verified")
     db.delete(r)
+    db.flush()
+    used = set()
+    for c in db.query(m.Claim).filter_by(project_id=ctx.pid):
+        if c.created_by.startswith("system:missing"):
+            continue
+        for key in ("component", "from", "to"):
+            if isinstance(c.details.get(key), str):
+                used.add(c.details[key])
+    for comp in db.query(m.Component).filter_by(project_id=ctx.pid).all():
+        if comp.key not in used:
+            db.delete(comp)
     db.flush()
     return removed_claims
 
@@ -382,7 +410,7 @@ def set_consent(body: dict, ctx=Depends(need("manager")), db: Session = Depends(
     if not author:
         raise HTTPException(422, "author required")
     granted = bool(body.get("granted", False))
-    c = db.query(m.ContributorConsent).filter_by(project_id=ctx.pid, author=author).first()
+    c = next((x for x in db.query(m.ContributorConsent).filter_by(project_id=ctx.pid) if x.author.lower() == author.lower()), None)
     if not c:
         c = m.ContributorConsent(project_id=ctx.pid, author=author)
         db.add(c)
@@ -408,6 +436,13 @@ def consent_mode(body: dict, ctx=Depends(need("manager")), db: Session = Depends
     if mode not in ("opt_out", "opt_in"):
         raise HTTPException(422, "mode must be opt_out or opt_in")
     ctx.project.consent_mode = mode
+    if mode == "opt_in":
+        allowed = {c.author.lower() for c in db.query(m.ContributorConsent).filter_by(project_id=ctx.pid, granted=True)}
+        for r in db.query(m.SourceRecord).filter_by(project_id=ctx.pid).all():
+            if r.record_type != "document" and (not r.author or r.author.lower() not in allowed):
+                _purge(db, ctx, r)
+        claims_engine.reconcile(db, ctx.pid)
+        graph.rebuild_graph(db, ctx.pid)
     ledger.append(db, ctx.pid, "consent_mode_changed", "project", ctx.pid, actor=ctx.user.id, new_state={"mode": mode}, verification="verified")
     audit(db, "consent_mode_changed", ctx.user, ctx.org_id, ctx.pid, mode=mode)
     db.commit()

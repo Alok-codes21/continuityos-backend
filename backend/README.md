@@ -100,3 +100,38 @@ characters and are closed after extraction. Set upload form `record_type` to
 `meeting` or `document` to override heuristic classification (`auto` is default).
 Existing PostgreSQL deployments must widen sources.last_cursor to TEXT before
 using long continuation state; create_all does not migrate existing columns.
+
+
+### Detailed audit lifecycle changes
+
+Dedupe is per source identity and latest-version fingerprint, not project-wide text.
+Title, author, URL, type and connector metadata changes are version-significant.
+Reverting A -> B -> A creates a third version. Old hashes are supported as legacy
+rows but the first post-upgrade sync may create one extra version.
+Deletion removes unsupported claims even when previously verified and removes
+record-bound tasks/decisions. It also invalidates all project handover, rehearsal
+and stored risk snapshots because they may embed deleted text. This is deliberately
+conservative: regenerate and approve a handover after deletion. Previously exported
+PDFs and backups are outside this API's deletion control.
+
+Derived content fields now use encrypted text/JSON, including claim statements,
+evidence excerpts, graph labels, and materialized handover/rehearsal content. This
+is not whole-database encryption: routing keys, identities, timestamps and the
+append-only audit ledger remain readable. Production needs encrypted disks/backups
+and restricted database access too. Wrong-key reads fail rather than returning blank.
+Existing PostgreSQL installations MUST migrate changed JSON columns to TEXT using
+`ALTER TABLE ... ALTER COLUMN ... TYPE TEXT USING ...::text` before deploying this
+version. Existing plaintext rows remain readable, but are not encrypted until
+rewritten. Take a verified backup and run a separate controlled encryption backfill
+before claiming all historical data is encrypted. Do not deploy this schema change
+blindly to an existing database. New databases use the new types automatically.
+
+Consent still records a manager's assertion for an exact provider author identifier;
+it is not independently authenticated employee consent. Do not use opt-in mode as
+proof of personal legal consent until a verified provider-identity/self-service
+consent flow exists. Only manual-upload documents are exempt from the opt-in author
+check. Disconnecting removes the local credential, not the provider's token grant;
+revoke it at the provider separately. Imported data requires a separate deletion.
+Unanswered questions are rechecked against the original role; missing evidence
+keeps the gap open, and supported evidence closes it. Generic contradiction
+detection remains limited to explicit configuration values.
