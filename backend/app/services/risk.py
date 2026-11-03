@@ -129,6 +129,10 @@ def simulate(db, pid, person_key_, user=None, persist=True):
         why.append({"text": f"{len(bugs)} unresolved bug(s) in progress: {', '.join(b.name for b in bugs[:5])}.", "kind": "bugs", "claim_ids": ids(bug_edges)})
     if sole:
         why.append({"text": f"{sole} claim(s) are supported only by records written by {p.name}.", "kind": "single_source_knowledge", "claim_ids": sole_ids[:50]})
+    for w in why:  # every explanation also names the source records behind its claims
+        cids = w.get("claim_ids") or []
+        if cids:
+            w["record_ids"] = sorted({e.record_id for e in db.query(m.EvidenceLink).filter(m.EvidenceLink.claim_id.in_(cids)) if e.record_id})[:50]
     result = {
         "person": {"key": p.key, "name": p.name, "user_id": p.user_id},
         "level": level, "level_rules": LEVEL_RULES, "holder_definition": HOLDER_DEFINITION,

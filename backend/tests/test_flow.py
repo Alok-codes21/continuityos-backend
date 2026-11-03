@@ -274,7 +274,7 @@ def test_full_interview_to_handover_flow(client):
     # handover doc
     h = client.post(f"/api/projects/{pid}/handovers", json={"person": "priyasharma", "incoming_user_id": yen["user_id"]}, headers=G).json()
     secs = {s["key"]: s for s in h["sections"]}
-    assert len(secs) == 10 and secs["ownership"]["items"] and all(i["evidence"] for i in secs["ownership"]["items"])
+    assert len(secs) == 11 and secs["limitations"]["items"] and secs["ownership"]["items"] and all(i["evidence"] for i in secs["ownership"]["items"])
     assert any(i["evidence"] for i in secs["decisions"]["items"])
     # incoming user can't see an unapproved handover
     assert client.get(f"/api/projects/{pid}/handovers/{h['id']}", headers=Y).status_code == 404
