@@ -56,4 +56,9 @@ def create_app(test_config=None):
     @app.get("/")
     def frontend():
         return render_template("index.html")
+
+    @app.get("/workspace/knowledge")
+    def knowledge_workspace():
+        return render_template("knowledge.html")
+    
     return app
