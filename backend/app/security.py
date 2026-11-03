@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .crypto import fernet
 from .db import get_db
 from . import models as m
 
@@ -35,10 +36,7 @@ def make_token(user_id: str, jti: str = "") -> str:
 
 
 def _fernet() -> Fernet:
-    key = settings.token_key
-    if not key:  # derive a stable dev key from the JWT secret; set TOKEN_ENCRYPTION_KEY in production
-        key = base64.urlsafe_b64encode(hashlib.sha256(("tok:" + settings.jwt_secret).encode()).digest()).decode()
-    return Fernet(key.encode())
+    return fernet()
 
 
 def encrypt_token(t: str) -> str:

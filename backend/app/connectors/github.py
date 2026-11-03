@@ -62,16 +62,23 @@ class GitHubConnector(SourceConnector):
         return out
 
     def fetch_records(self, source_ref, cursor=None, since=None, until=None):
+        if not since and cursor:  # incremental sync: the cursor is the time of the last successful sync
+            try:
+                since = datetime.fromisoformat(str(cursor))
+            except ValueError:
+                since = None
         p = {"since": since.isoformat() + "Z"} if since else {}
         recs = []
         self.warnings = []
-        for kind, path, params in (("commit", "commits", p), ("pull_request", "pulls", {"state": "all"}), ("issue", "issues", {"state": "all", **p})):
+        for kind, path, params in (("commit", "commits", p), ("pull_request", "pulls", {"state": "all", "sort": "updated", "direction": "desc"}), ("issue", "issues", {"state": "all", **p})):
             try:
                 items = self._paged(f"/repos/{source_ref}/{path}", params)
             except ConnectorForbidden:
                 self.warnings.append(f"{path}: token has no permission, skipped")
                 continue
             for it in items:
+                if kind == "pull_request" and since and (_dt(it.get("updated_at")) or datetime.max) < since:
+                    continue  # PRs have no `since` filter in the API; filter by last update
                 if kind == "issue" and "pull_request" in it:
                     continue
                 recs.append(self.normalize_record({"_k": kind, **it}, source_ref))
