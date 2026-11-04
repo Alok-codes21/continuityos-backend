@@ -38,3 +38,7 @@ def ready():
     except Exception:
         raise HTTPException(503, "Database is not ready") from None
     return {"status": "ready", "schema_migration_verified": False}
+
+# Last route: API endpoints above keep precedence over the optional static UI.
+from .frontend import mount_frontend
+mount_frontend(app)

@@ -1,0 +1,44 @@
+import {test,expect} from '@playwright/test';
+const password='local-test-password-123';
+test('multi-user project interview approval handover PDF and skills',async({page,request,browser})=>{
+ test.setTimeout(65000);
+ const nonce=Date.now(), accounts={};
+ for(const [role,name] of [['admin','Team Admin'],['contributor','Priya Sharma'],['manager','Review Manager'],['incoming','Incoming Colleague']]){
+  const email=`${role}-${nonce}@example.com`;
+  const res=await request.post('/api/auth/register',{data:{email,password,name,org_name:`Test ${role}`}});expect(res.ok()).toBeTruthy();accounts[role]={...await res.json(),email,name};
+ }
+ async function login(p,a){await p.goto('/');await p.getByLabel('Work email').fill(a.email);await p.getByLabel('Password',{exact:true}).fill(password);await p.getByRole('button',{name:'Sign in',exact:true}).click();await expect(p.locator('#project-picker')).toBeVisible();}
+ await login(page,accounts.admin);await page.goto('/#/settings');
+ await page.getByLabel('Project name',{exact:true}).fill('Team continuity');await page.getByRole('button',{name:'Create project',exact:true}).click();await expect(page.locator('#project-picker')).toContainText('Team continuity');
+ for(const role of ['contributor','manager','incoming']){
+  const a=accounts[role];await page.getByLabel('Member email').fill(a.email);await page.getByLabel('Member name').fill(a.name);await page.getByLabel('Organisation role').selectOption(role);await page.getByRole('button',{name:'Add organisation member',exact:true}).click();await expect(page.locator('#new-member-result')).toContainText(a.user.id);
+  await page.locator('#project-member select').selectOption(a.user.id);await page.getByRole('button',{name:'Add to this project',exact:true}).click();await expect(page.locator('#project-member .live-feedback')).toContainText('Saved successfully');
+ }
+ const pid=await page.locator('#project-picker').inputValue();
+ await page.goto('/#/sources');
+ for(const [name,text]of [['architecture.md','Priya Sharma owns payments-service.\nWe decided to adopt Redis for the payments-service cache.\nThe payments-service timeout is 30 seconds.\npayments-service depends on auth-service.'],['runbook.md','The payments-service timeout is 60 seconds.\nOur rollback uses blue green deploys.']]){
+  await page.getByLabel('Document (PDF, DOCX, TXT, MD, CSV)').setInputFiles({name,mimeType:'text/markdown',buffer:Buffer.from(text)});await page.getByLabel('Exact provider author identifier').fill('Priya Sharma');await page.getByRole('button',{name:'Upload and extract'}).click();await expect(page.locator('#upload-result')).toContainText('"stored": 1');
+ }
+ await page.goto('/#/knowledge-graph');await page.getByLabel('Graph person').selectOption('priyasharma');await page.locator('#bind [name=user_id]').selectOption(accounts.contributor.user.id);await page.getByRole('button',{name:'Bind account',exact:true}).click();await expect(page.locator('#binding-result')).toContainText('"ok": true');
+ await page.goto('/#/handover-interview');await page.getByLabel('Departing person').selectOption('priyasharma');await page.getByRole('button',{name:'Start interview',exact:true}).click();await expect(page.locator('#interview-detail')).toContainText('Sources disagree');
+ const worker=await browser.newPage();await login(worker,accounts.contributor);await worker.locator('#project-picker').selectOption(pid);await worker.goto('/#/handover-interview');await worker.getByRole('button',{name:'Open interview'}).click();
+ 
+ const all=worker.locator('#interview-detail form');await expect(all.first()).toBeVisible();
+ // Use a concrete source-grounded answer for a conflict question identified from its heading.
+ const forms=await worker.locator('#interview-detail form').all();let answered=false;
+ for(const f of forms){if((await f.locator('..').textContent()).includes('30')&&(await f.locator('..').textContent()).includes('60')){await f.getByLabel('Your answer').fill('60 seconds is correct');await f.getByRole('button',{name:'Submit draft answer'}).click();answered=true;break;}}
+ expect(answered).toBeTruthy();await expect(worker.getByRole('button',{name:'Confirm my answer'})).toBeVisible();await worker.getByRole('button',{name:'Confirm my answer'}).click();await expect(worker.locator('#interview-result')).toContainText('approval_id');await worker.evaluate(()=>scrollTo(0,0));await worker.screenshot({path:'/downloads/integration-interview.png',fullPage:true});
+ await page.goto('/#/handover-centre');await expect(page.getByRole('button',{name:'Approve',exact:true})).toBeVisible();await page.getByRole('button',{name:'Approve',exact:true}).click();await expect(page.getByRole('button',{name:'Approve',exact:true})).toHaveCount(0);await expect(page.locator('#live-body')).toContainText('No records yet');
+ await page.goto('/#/handover-interview');await page.getByRole('button',{name:'Open interview'}).click();await page.getByRole('button',{name:'Complete interview',exact:true}).click();await expect(page.locator('#interview-detail form')).toHaveCount(0);
+ await page.goto('/#/handover-centre');await page.getByLabel('Departing person').selectOption('priyasharma');await page.getByLabel('Assign incoming project member').selectOption(accounts.incoming.user.id);await page.getByRole('button',{name:'Generate handover',exact:true}).click();await expect(page.getByRole('button',{name:'Request approval'})).toBeVisible();await expect(page.locator('#handover-detail')).toContainText('Handover version');await page.getByRole('button',{name:'Request approval'}).click();await expect(page.getByRole('button',{name:'Approve',exact:true})).toBeVisible();
+ // Own-request approval is denied, and the UI must surface the server error.
+ await page.getByRole('button',{name:'Approve',exact:true}).click();await expect(page.getByRole('alert')).toBeVisible();
+ const reviewer=await browser.newPage();await login(reviewer,accounts.manager);await reviewer.locator('#project-picker').selectOption(pid);await reviewer.goto('/#/handover-centre');await reviewer.getByRole('button',{name:'Approve',exact:true}).click();await expect(reviewer.getByRole('button',{name:'Approve',exact:true})).toHaveCount(0);await expect(reviewer.locator('#live-body')).toContainText('approved');await reviewer.evaluate(()=>scrollTo(0,0));await reviewer.screenshot({path:'/downloads/integration-approval.png',fullPage:true});
+ const incoming=await browser.newPage();await login(incoming,accounts.incoming);await incoming.locator('#project-picker').selectOption(pid);await incoming.goto('/#/incoming-workspace');await incoming.getByRole('button',{name:'Read handover'}).click();await expect(incoming.locator('#handover-detail')).toContainText('payments-service');
+ const downloadPromise=incoming.waitForEvent('download');await incoming.getByRole('button',{name:'Download PDF'}).click();const download=await downloadPromise;await download.saveAs('/downloads/integration-handover.pdf');
+ await incoming.getByLabel('Skill',{exact:true}).fill('Payments operations');await incoming.getByRole('button',{name:'Submit for manager review'}).click();await expect(incoming.locator('#skills-result')).toContainText('"approved": false');await incoming.getByRole('button',{name:'Load skills'}).click();await expect(incoming.locator('#skills-result')).toContainText('Payments operations');await incoming.evaluate(()=>scrollTo(0,0));await incoming.screenshot({path:'/downloads/integration-incoming.png',fullPage:true});
+ await reviewer.goto('/#/incoming-workspace');await reviewer.getByRole('button',{name:'Approve skill',exact:true}).click();await expect(reviewer.getByRole('button',{name:'Approve skill',exact:true})).toHaveCount(0);
+ await incoming.setViewportSize({width:390,height:844});await expect.poll(async()=>Math.round((await incoming.locator('.sidebar').boundingBox()).x+(await incoming.locator('.sidebar').boundingBox()).width)).toBeLessThanOrEqual(0);await expect.poll(()=>incoming.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await incoming.goto('/#/incoming-workspace');await expect(incoming.getByRole('button',{name:'Read handover'})).toBeVisible();await incoming.evaluate(()=>scrollTo(0,0));await incoming.screenshot({path:'/downloads/integration-mobile.png',fullPage:false});
+ await incoming.getByRole('button',{name:'Toggle navigation'}).click();await expect(incoming.locator('.sidebar')).toHaveClass(/mobile-open/);await incoming.locator('.sidebar-overlay').click({position:{x:360,y:300}});await expect(incoming.locator('.sidebar')).not.toHaveClass(/mobile-open/);
+ await Promise.all([worker.close(),reviewer.close(),incoming.close()]);
+});

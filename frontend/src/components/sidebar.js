@@ -2,8 +2,8 @@
  * ContinuityOS — Sidebar Component
  */
 
-import { MockStore } from '../data/mock-store.js';
-import { navigate } from '../router.js';
+const SidebarPreferences = { get: (key, fallback) => key === 'sidebarCollapsed' ? localStorage.getItem('continuity_sidebar_collapsed') === 'true' : fallback, set: (key, value) => { if (key === 'sidebarCollapsed') localStorage.setItem('continuity_sidebar_collapsed', String(value)); } };
+const navigate = hash => { window.location.hash = hash; };
 
 // ─────────────────────────────────────────────────────────────
 // NAV CONFIGURATION
@@ -84,10 +84,10 @@ function renderSection(section, currentHash) {
  */
 export function renderSidebar() {
   const currentHash = window.location.hash || '#/overview';
-  const currentUser = MockStore.get('currentUser', {
-    name: 'Alex Rivera',
-    role: 'Senior Backend Engineer',
-    avatar: 'AR',
+  const currentUser = SidebarPreferences.get('currentUser', {
+    name: 'Workspace member',
+    role: 'Live workspace',
+    avatar: 'U',
   });
 
   const sections = NAV_SECTIONS.map(s => renderSection(s, currentHash)).join('<hr class="sidebar-divider">');
@@ -101,7 +101,7 @@ export function renderSidebar() {
         </div>
         <div class="sidebar-logo-text">
           <div class="sidebar-logo-name">ContinuityOS</div>
-          <div class="sidebar-logo-version">v0.1 DEMO</div>
+          <div class="sidebar-logo-version">LIVE API</div>
         </div>
       </div>
 
@@ -122,7 +122,7 @@ export function renderSidebar() {
 
       <!-- Footer: org + user -->
       <div class="sidebar-footer">
-        <div class="sidebar-org">NovaTech Engineering</div>
+        <div class="sidebar-org">Connected organisation</div>
         <div class="sidebar-user" id="sidebar-user-btn" title="${currentUser.name}">
           <div class="sidebar-user-avatar">${currentUser.avatar || 'U'}</div>
           <div class="sidebar-user-info">
@@ -156,7 +156,7 @@ export function initSidebar() {
   if (!sidebar) return;
 
   // ── Restore collapsed state ───────────────────────────────
-  const isCollapsed = MockStore.get('sidebarCollapsed', false);
+  const isCollapsed = SidebarPreferences.get('sidebarCollapsed', false);
   if (isCollapsed) {
     applyCollapsed(true, sidebar, mainArea, topbar, collapseIcon);
   }
@@ -165,7 +165,7 @@ export function initSidebar() {
   collapseBtn?.addEventListener('click', () => {
     const collapsed = sidebar.classList.contains('collapsed');
     applyCollapsed(!collapsed, sidebar, mainArea, topbar, collapseIcon);
-    MockStore.set('sidebarCollapsed', !collapsed);
+    SidebarPreferences.set('sidebarCollapsed', !collapsed);
   });
 
   // ── Mobile overlay close ──────────────────────────────────
