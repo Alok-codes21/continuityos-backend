@@ -1,0 +1,29 @@
+/** Typed, escaped result views. Objects become labelled details, lists become cards/tables. */
+const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const names={ok:'Completed',id:'Reference',approval_id:'Review request',stored:'Stored records',duplicates:'Duplicates',flagged:'Flagged records',workspace_knowledge_coverage:'Workspace knowledge coverage',orphaned_components:'Components without a holder',employee_confirmed:'Employee confirmed',manager_approved:'Manager approved',temporary_password:'One-time temporary password',user_id:'Member',seq:'Sequence',q:'Question',at:'Time',score:'Knowledge coverage',not_employee_competency:'Not an employee competency assessment'};
+export const label=k=>names[k]||k.replaceAll('_',' ').replace(/^./,s=>s.toUpperCase());
+const scalar=(v,k)=>v===null||v===undefined||v===''?'Not recorded':typeof v==='boolean'?(v?'Yes':'No'):k==='score'&&typeof v==='number'?`${Math.round(v*100)}%`:escape(typeof v==='string'&&/^[a-z]+(_[a-z]+)+$/.test(v)&&! /^(usr|clm|prj|org|ap|rec|src|int|pk|reh|iv)_/.test(v)?label(v):v);
+const tag=v=>`<span class="live-badge">${escape(label(String(v)))}</span>`;
+const list=items=>items.length?`<ul>${items.map(v=>`<li>${escape(v)}</li>`).join('')}</ul>`:'<p class="muted">None documented.</p>';
+function citations(items){return items.map(c=>`<blockquote class="evidence-card"><strong>${escape(c.source||'Evidence')}</strong> ${tag(c.status||c.source_type||'source')}<p>${escape(c.quote)}</p><small>${escape(c.location||'Location not recorded')}</small></blockquote>`).join('');}
+export function resultView(value,key=''){
+ if(value&&typeof value==='object'&&!Array.isArray(value)){
+  if(value.person&&value.orphaned_components)return `<div class="simulation-summary"><h3>${escape(value.person.name)} ${tag(value.level)}</h3><p>${escape(value.recommendation)}</p><div class="live-grid">${[['Components without a holder',value.orphaned_components.length],['Open tasks',value.open_tasks.length],['Unresolved bugs',value.unresolved_bugs.length],['Single-source claims',value.single_source_claims]].map(([t,v])=>`<div><span class="muted">${t}</span><div class="live-stat">${v}</div></div>`).join('')}</div><h3>Components without a holder</h3>${list(value.orphaned_components)}<h3>Documented component coverage</h3>${resultView(value.components)}<h3>Why this result</h3>${value.why.map(w=>`<article class="result-item"><p>${escape(w.text)}</p><small>Evidence claims: ${escape((w.claim_ids||[]).join(', ')||'Not recorded')}</small></article>`).join('')}<h3>Open work</h3>${list([...value.open_tasks,...value.unresolved_bugs])}<h3>Knowledge gaps</h3>${resultView(value.related_gaps)}<details><summary>How risk is calculated</summary><p>${escape(value.level_rules)}</p><p>${escape(value.holder_definition)}</p></details></div>`;
+  if(value.assessment_type)return `<h3>Workspace knowledge coverage ${Math.round(value.score*100)}%</h3><p>This is not an employee competency assessment.</p><p>${tag(value.readiness)} ${value.scenarios} sampled scenarios, ${value.eligible_scenarios} eligible, ${value.omitted_scenarios} omitted.</p>${resultView(value.results)}<h3>Missed topics</h3>${list(value.missed_topics)}`;
+  if('answer' in value&&'answered' in value)return `<h3>${value.answered?'Evidence found':'Not documented'}</h3><p>${escape(value.answer)}</p>${value.turns?`<p>${value.answered_turns} answered of ${value.turns} turns</p>`:''}${citations(value.citations||[])}`;
+  if(value.statement&&value.evidence)return `<h3>${escape(value.statement)}</h3><p>${tag(value.status)} ${tag(value.category)} ${escape(value.freshness)}</p><h3>Evidence</h3>${citations(value.evidence)}<details><summary>Claim details and history</summary>${resultView({details:value.details,history:value.history})}</details>`;
+  if(value.skill&&value.profile)return `<h3>${escape(value.skill)} ${tag(value.approved?'approved':'pending')}</h3><p>${escape(value.level)} · ${escape(value.source.replaceAll('_',' '))}</p><p class="muted">Member: ${escape(value.user_id)}</p>${resultView(value.profile)}`;
+  if(value.content&&value.record_type)return `<h3>${escape(value.title)}</h3><p>${tag(value.status)} ${tag(value.visibility)} · version ${value.version}</p><p>Author: ${escape(value.author||'Not recorded')}</p><div class="source-content">${escape(value.content)}</div>${resultView({redactions:value.redactions,injection_suspected:value.injection_suspected})}`;
+  if(value.turns&&Array.isArray(value.turns))return `<p class="muted">Session ${escape(value.id)}</p>${value.turns.map(t=>`<article class="result-item">${t.evaluation?resultView(t.evaluation):`<h3>${escape(t.q)}</h3>${resultView(t)}`}</article>`).join('')}`;
+ }
+
+ if(value===null||typeof value!=='object')return `<span>${scalar(value,key)}</span>`;
+ if(Array.isArray(value)){
+  if(!value.length)return '<p class="muted">No records.</p>';
+  if(value.every(v=>v===null||typeof v!=='object'))return `<ul class="result-list">${value.map(v=>`<li>${scalar(v,key)}</li>`).join('')}</ul>`;
+  const keys=[...new Set(value.flatMap(v=>v&&typeof v==='object'?Object.keys(v):[]))];
+  if(keys.length<=7&&value.every(v=>v&&typeof v==='object'&&Object.values(v).every(x=>x===null||typeof x!=='object')))return `<div class="table-scroll"><table class="live-table"><thead><tr>${keys.map(k=>`<th scope="col">${escape(label(k))}</th>`).join('')}</tr></thead><tbody>${value.map(v=>`<tr>${keys.map(k=>`<td>${scalar(v[k],k)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  return value.map((v,i)=>`<article class="result-item" aria-label="Result ${i+1}">${resultView(v,key)}</article>`).join('');
+ }
+ return `<dl class="result-details">${Object.entries(value).map(([k,v])=>`<div><dt>${escape(label(k))}</dt><dd>${resultView(v,k)}</dd></div>`).join('')}</dl>`;
+}

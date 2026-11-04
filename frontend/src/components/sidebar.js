@@ -123,7 +123,7 @@ export function renderSidebar() {
       <!-- Footer: org + user -->
       <div class="sidebar-footer">
         <div class="sidebar-org">Connected organisation</div>
-        <div class="sidebar-user" id="sidebar-user-btn" title="${currentUser.name}">
+        <div class="sidebar-user" id="sidebar-user-label">
           <div class="sidebar-user-avatar">${currentUser.avatar || 'U'}</div>
           <div class="sidebar-user-info">
             <div class="sidebar-user-name">${currentUser.name}</div>
@@ -148,7 +148,7 @@ export function renderSidebar() {
 export function initSidebar() {
   const sidebar = document.getElementById('sidebar');
   const mainArea = document.getElementById('main-area');
-  const topbar = document.getElementById('topbar-container');
+  const topbar = document.querySelector('.topbar');
   const overlay = document.getElementById('sidebar-overlay');
   const collapseBtn = document.getElementById('sidebar-collapse-btn');
   const collapseIcon = document.getElementById('sidebar-collapse-icon');
@@ -184,13 +184,7 @@ export function initSidebar() {
     });
   });
 
-  // ── Active state on hash change ───────────────────────────
-  window.addEventListener('hashchange', () => {
-    const hash = window.location.hash || '#/overview';
-    sidebar.querySelectorAll('.sidebar-nav-item').forEach(el => {
-      el.classList.toggle('active', el.dataset.route === hash);
-    });
-  });
+
 }
 
 /**

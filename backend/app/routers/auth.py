@@ -162,7 +162,7 @@ def projects(db: Session = Depends(get_db), user: m.User = Depends(current_user)
     for mem in db.query(m.Membership).filter_by(user_id=user.id).all():
         for p in db.query(m.Project).filter_by(org_id=mem.org_id):
             if mem.role in ("admin", "manager") or db.query(m.ProjectMember).filter_by(project_id=p.id, user_id=user.id).first():
-                out.append({"id": p.id, "org_id": p.org_id, "name": p.name, "role": mem.role})
+                out.append({"id": p.id, "org_id": p.org_id, "name": p.name, "role": mem.role, "consent_mode": p.consent_mode})
     return out
 
 
@@ -177,6 +177,12 @@ def create_project(org_id: str, body: dict, db: Session = Depends(get_db), user:
     audit(db, "project_created", user, org_id)
     db.commit()
     return {"id": p.id, "name": p.name}
+
+
+@router.get("/projects/{project_id}/members")
+def project_members(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    rows = db.query(m.ProjectMember, m.User).join(m.User, m.User.id == m.ProjectMember.user_id).filter(m.ProjectMember.project_id == ctx.pid).all()
+    return [{"user_id": u.id, "name": u.name, "email": u.email, "role": db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=u.id).one().role} for _, u in rows]
 
 
 @router.post("/projects/{project_id}/members", status_code=201)

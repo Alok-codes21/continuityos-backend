@@ -27,3 +27,13 @@ def test_missing_build_keeps_api_available(tmp_path, monkeypatch):
     app = FastAPI()
     mount_frontend(app)
     assert TestClient(app).get('/').status_code == 404
+
+
+def test_project_members_are_live_and_permission_scoped(client):
+    from conftest import H, register
+    admin = register(client, 'members@example.com', 'Members Admin')
+    base = f"/api/projects/{admin['project_id']}/members"
+    assert client.get(base, headers=H(admin['token'])).json() == []
+    assert client.post(base, headers=H(admin['token']), json={'user_id': admin['user']['id']}).status_code == 201
+    assert client.get(base, headers=H(admin['token'])).json()[0]['name'] == 'Members Admin'
+    assert client.get('/api/projects', headers=H(admin['token'])).json()[0]['consent_mode'] == 'opt_out'

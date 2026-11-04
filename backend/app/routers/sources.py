@@ -179,6 +179,7 @@ def _save_file_paths(integration, source_ref, paths):
 
 
 class SelectionIn(BaseModel):
+    selection_id: str | None = None
     file_paths: list[str] | None = Field(default=None, max_length=40)
     included: bool = True
     date_from: datetime | None = None
@@ -195,7 +196,9 @@ def set_selection(source_id: str, body: SelectionIn, ctx=Depends(need("manager")
     if body.date_from and body.date_to and body.date_from > body.date_to:
         raise HTTPException(422, "date_from must not be after date_to")
     s = _source(db, ctx, source_id)
-    sel = db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id).first()
+    sel = db.get(m.SourceSelection, body.selection_id) if body.selection_id else db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id).first()
+    if body.selection_id and (not sel or sel.integration_id != s.integration_id or sel.project_id != ctx.pid or sel.source_ref != s.external_id):
+        raise HTTPException(404, "Selection not found")
     if not sel:
         sel = m.SourceSelection(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id)
         db.add(sel)

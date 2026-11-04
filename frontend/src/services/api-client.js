@@ -20,7 +20,7 @@ export async function request(path, options = {}) {
   if (!res.ok) {
     if (res.status === 401) { session.token = null; window.dispatchEvent(new Event('session-expired')); }
     const detail = body.detail || body.message || `Request failed (${res.status})`;
-    throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail), body);
+    throw new ApiError(res.status, typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(e=>`${(e.loc||[]).filter(x=>x!=='body').join(' / ')}: ${e.msg||'Invalid value'}`).join('; ') : 'Request could not be completed', body);
   }
   return body;
 }
