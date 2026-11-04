@@ -46,12 +46,8 @@ def ensure_person(db, pid, name):
         n.props = {**n.props, "aliases": sorted(al), "display_aliases": sorted(set(n.props.get("display_aliases", []) + [name]))}
         return n
     n = ensure_node(db, pid, "person", norm_person(name), (name or "").strip().lstrip("@"), {"aliases": [], "display_aliases": [name]})
-    # link to an organisation member when name/email matches
-    org_id = db.get(m.Project, pid).org_id
-    for u in (db.query(m.User).join(m.Membership, m.Membership.user_id == m.User.id).filter(m.Membership.org_id == org_id).all()):
-        if person_key(u.name) == n.key or person_key(u.email.split("@")[0]) == n.key or person_key(u.name.split()[0]) == n.key:
-            n.user_id, n.name = u.id, u.name
-            break
+    # A source name is not an authenticated account identity. Managers bind
+    # people explicitly after checking the provider identity.
     return n
 
 
@@ -62,6 +58,9 @@ def merge_people(db, pid, keep_key, merge_key):
         return None
     keep.props = {**keep.props, "aliases": sorted(set(keep.props.get("aliases", [])) | set(other.props.get("aliases", [])) | {other.key}),
                   "display_aliases": sorted(set(keep.props.get("display_aliases", [])) | set(other.props.get("display_aliases", [])) | {other.name})}
+    if keep.user_id and other.user_id and keep.user_id != other.user_id:
+        from fastapi import HTTPException
+        raise HTTPException(409, "People are bound to different accounts; resolve the bindings first")
     if not keep.user_id and other.user_id:
         keep.user_id = other.user_id
     for e in db.query(m.GraphEdge).filter((m.GraphEdge.src_id == other.id) | (m.GraphEdge.dst_id == other.id)).all():
@@ -80,17 +79,24 @@ def rebuild_graph(db, pid):
     db.flush()
     for c in db.query(m.Component).filter_by(project_id=pid).all():
         ensure_node(db, pid, "service" if c.kind != "module" else "module", c.key, c.name, {"kind": c.kind})
-    edges = set()
+    edges = {}
     proj = db.get(m.Project, pid)
     pn = ensure_node(db, pid, "project", pid, proj.name if proj else "Project")
 
     def edge(src, dst, rel, ver, claim=None, rec=None):
         k = (src.id, dst.id, rel)
-        if k in edges or src.id == dst.id:
+        if src.id == dst.id:
             return
-        edges.add(k)
-        db.add(m.GraphEdge(project_id=pid, src_id=src.id, dst_id=dst.id, relation=rel, verification=ver,
-                           claim_id=claim.id if claim else None, record_id=rec))
+        if k in edges:
+            # Do not let an inferred first occurrence hide stronger evidence.
+            if {"inferred": 0, "evidence_backed": 1, "verified": 2}.get(ver, 0) > {"inferred": 0, "evidence_backed": 1, "verified": 2}.get(edges[k].verification, 0):
+                edges[k].verification = ver
+                edges[k].claim_id = claim.id if claim else None
+            return
+        row = m.GraphEdge(project_id=pid, src_id=src.id, dst_id=dst.id, relation=rel, verification=ver,
+                          claim_id=claim.id if claim else None, record_id=rec)
+        edges[k] = row
+        db.add(row)
 
     def comp_node(name):
         c = db.query(m.Component).filter_by(project_id=pid, key=comp_base(name)).first()
@@ -128,6 +134,13 @@ def rebuild_graph(db, pid):
             p, cn = ensure_person(db, pid, d["person"]), comp_node(d["component"])
             if cn:
                 edge(p, cn, "verified_holds" if c.category == "holder" else "backup_owner", ver, c)
+        elif c.category == "code_symbol":
+            node = ensure_node(db, pid, "code_symbol", c.subject_key, d["symbol"], {"kind": d.get("kind"), "path": d.get("path")})
+            if comp_node(d["component"]):
+                edge(node, comp_node(d["component"]), "declared_in", ver, c)
+        elif c.category == "owner_hint":
+            if comp_node(d["component"]):
+                edge(ensure_person(db, pid, d["person"]), comp_node(d["component"]), "possible_owner", "inferred", c)
         elif c.category == "contribution":
             p, cn = ensure_person(db, pid, d["person"]), comp_node(d["component"])
             if cn:
@@ -209,7 +222,7 @@ def rebuild_graph(db, pid):
     for rec in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == pid, m.SourceRecord.source_id.isnot(None), m.SourceRecord.author.isnot(None)):
         sr = srcs.get(rec.source_id)
         if sr and sr.source_type == "github" and not rec.injection_suspected:
-            edge(ensure_person(db, pid, rec.author), ensure_node(db, pid, "repository", sr.external_id.lower(), sr.name or sr.external_id), "contributes_to", "inferred")
+            edge(ensure_person(db, pid, rec.author), ensure_node(db, pid, "repository", sr.external_id.lower(), sr.name or sr.external_id), "contributes_to", "inferred", rec=rec.id)
     for c in claims:
         if c.category == "risk" and not c.details.get("draft") and not (c.details.get("component") or c.details.get("from")):
             rn = ensure_node(db, pid, "risk", c.subject_key, c.statement[:80])
@@ -222,6 +235,11 @@ def rebuild_graph(db, pid):
         if newer:
             edge(ensure_node(db, pid, "decision", newer.subject_key, newer.statement[:80]),
                  ensure_node(db, pid, "decision", c.subject_key, c.statement[:80]), "supersedes", "evidence_backed", c)
+    db.flush()
+    linked = {e.src_id for e in db.query(m.GraphEdge).filter_by(project_id=pid)} | {e.dst_id for e in db.query(m.GraphEdge).filter_by(project_id=pid)}
+    for node in db.query(m.GraphNode).filter_by(project_id=pid).all():
+        if node.id not in linked and node.node_type != "project" and not node.user_id:
+            db.delete(node)
     db.flush()
 
 

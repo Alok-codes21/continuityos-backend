@@ -23,6 +23,9 @@ def load_docs(client, admin, pid):
         r = up(client, admin["token"], pid, n, t, author="Priya Sharma")
         assert r.status_code == 201, r.text
         assert r.json()["stored"] == 1
+    members = client.get(f"/api/orgs/{admin['org_id']}/members", headers=H(admin['token'])).json()
+    priya = next(x for x in members if x['name'] == 'Priya Sharma')
+    assert client.put(f"/api/projects/{pid}/graph/people/priyasharma/account", headers=H(admin['token']), json={'user_id':priya['user_id']}).status_code == 200
 
 
 def test_register_login_and_rbac(client):
@@ -87,7 +90,8 @@ def test_secret_redaction_and_dedupe(client):
     body = client.get(f"/api/projects/{pid}/records/{rid}", headers=H(t)).json()["content"]
     assert "hunter2hunter2" not in body and "sk_live_abcdefghijklmnopqrstuvwx" not in body and "priya@acme.io" not in body
     again = up(client, t, pid, "cfg-copy.md", SECRET).json()
-    assert again["duplicates"] == 1 and again["stored"] == 0
+    assert again["duplicates"] == 0 and again["stored"] == 1  # distinct filename keeps provenance
+    assert up(client, t, pid, "cfg-copy.md", SECRET).json()["duplicates"] == 1
 
 
 def test_injection_flagged_not_extracted(client):
@@ -479,7 +483,7 @@ def test_reverify_flow(client):
         cid = c.id
     assert cid in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]
     assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=A).status_code == 403  # same person verified it
-    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=G).status_code == 200
+    assert client.post(f"/api/projects/{pid}/claims/{cid}/reverify", headers=G, json={"reason": "Checked the latest procedure manually"}).status_code == 200
     got = client.get(f"/api/projects/{pid}/claims/{cid}", headers=A).json()
     assert got["freshness"] == "current" and "needs_reverification" not in got["details"] and got["details"]["reverified_by"] == gargi["user_id"]
     assert cid not in [x["id"] for x in client.get(f"/api/projects/{pid}/claims-needing-reverification", headers=A).json()]

@@ -1,5 +1,8 @@
 """Real GitHub REST connector (read-only): commits, pull requests, issues, CODEOWNERS."""
 import base64
+import fnmatch
+from urllib.parse import quote
+from pathlib import PurePosixPath
 from datetime import datetime
 
 import httpx
@@ -25,6 +28,11 @@ class GitHubConnector(SourceConnector):
         self.client = client or httpx.Client(timeout=20)
         self.warnings = []
         self.truncated = False
+        self.allowed_types = None
+        self.file_paths = []
+        self.max_files = 40
+        self.max_file_bytes = 200_000
+        self.max_total_bytes = 2_000_000
 
     def authenticate(self, credentials):
         self.token = credentials.get("token", "")
@@ -50,7 +58,7 @@ class GitHubConnector(SourceConnector):
         return {"login": u.get("login"), "scopes": ["read:repo"]}
 
     def get_available_sources(self):
-        repos = self._get("/user/repos", {"per_page": 50, "sort": "updated"})
+        repos = self._paged("/user/repos", {"sort": "updated"})
         return [{"source_ref": r["full_name"], "name": r["full_name"], "private": r.get("private", False)} for r in repos]
 
     def _paged(self, path, params):
@@ -77,6 +85,8 @@ class GitHubConnector(SourceConnector):
         recs = []
         self.warnings, self.truncated = [], False
         for kind, path, params in (("commit", "commits", p), ("pull_request", "pulls", {"state": "all", "sort": "updated", "direction": "desc"}), ("issue", "issues", {"state": "all", **p})):
+            if self.allowed_types is not None and kind not in self.allowed_types:
+                continue
             try:
                 items = self._paged(f"/repos/{source_ref}/{path}", params)
             except ConnectorForbidden:
@@ -88,9 +98,14 @@ class GitHubConnector(SourceConnector):
                 if kind == "issue" and "pull_request" in it:
                     continue
                 recs.append(self.normalize_record({"_k": kind, **it}, source_ref))
-        for path in ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"):
+        snapshot_ref = None
+        if self.file_paths and (self.allowed_types is None or {"document", "code_file"} & self.allowed_types):
+            recs.extend(self._fetch_files(source_ref))
+            snapshot_ref = getattr(self, "snapshot_ref", None)
+        for path in (("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+                     if self.allowed_types is None or "codeowners" in self.allowed_types else ()):
             try:
-                f = self._get(f"/repos/{source_ref}/contents/{path}")
+                f = self._get(f"/repos/{source_ref}/contents/{path}", {"ref": snapshot_ref} if snapshot_ref else None)
                 text = base64.b64decode(f["content"]).decode("utf-8", "replace")
                 recs.append(NormalizedRecord("github", f"{source_ref}:{path}", "codeowners", f"{path} ({source_ref})", text,
                                              None, f.get("html_url"), None, source_ref))
@@ -99,6 +114,77 @@ class GitHubConnector(SourceConnector):
                 continue
         recs = [r for r in recs if not until or not r.occurred_at or r.occurred_at <= until]
         return recs
+
+    def _file_kind(self, path):
+        p = PurePosixPath(path)
+        if p.suffix.lower() in {".md", ".rst", ".txt"} and (p.name.lower().startswith("readme") or "docs" in p.parts):
+            return "document"
+        excluded = {"node_modules", ".git", ".venv", "venv", "vendor", "dist", "build", "__pycache__"}
+        if any(part in excluded or part.startswith(".env") for part in p.parts):
+            return None
+        if p.suffix.lower() in {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rb", ".rs", ".cs", ".c", ".h", ".cpp"}:
+            return "code_file"
+        return None
+
+    def _fetch_files(self, source_ref):
+        """Read explicitly selected text files at one pinned default-branch commit. Never execute repository content."""
+        try:
+            repo = self._get(f"/repos/{source_ref}")
+            branch = quote(repo.get("default_branch") or "main", safe="")
+            head = self._get(f"/repos/{source_ref}/commits/{branch}")
+            ref = head["sha"]
+            self.snapshot_ref = ref
+            tree_sha = head["commit"]["tree"]["sha"]
+            tree = self._get(f"/repos/{source_ref}/git/trees/{tree_sha}", {"recursive": "1"})
+            if tree.get("truncated"):
+                self.truncated = True
+                self.warnings.append("Repository file tree is truncated; selection coverage is incomplete")
+            items, total = [], 0
+            for ent in sorted(tree.get("tree", []), key=lambda x: x.get("path", "")):
+                path = ent.get("path", "")
+                if ent.get("type") != "blob" or ent.get("mode") not in ("100644", "100755"):
+                    continue  # no symlinks or submodules
+                if not any(fnmatch.fnmatchcase(path, pat) for pat in self.file_paths):
+                    continue
+                kind = self._file_kind(path)
+                if not kind or (self.allowed_types is not None and kind not in self.allowed_types):
+                    continue
+                if ent.get("size", 0) > self.max_file_bytes:
+                    self.truncated = True
+                    self.warnings.append(f"Skipped oversized file: {path}")
+                    continue
+                if len(items) >= self.max_files or total + ent.get("size", 0) > self.max_total_bytes:
+                    self.truncated = True
+                    self.warnings.append("Selected repository files exceed sync file/byte limits")
+                    break
+                data = self._get(f"/repos/{source_ref}/contents/{quote(path, safe='/')}", {"ref": ref})
+                if data.get("encoding") != "base64" or data.get("type") != "file":
+                    self.truncated = True
+                    self.warnings.append(f"Skipped unsupported file response: {path}")
+                    continue
+                raw = base64.b64decode(data.get("content", ""))
+                if len(raw) > self.max_file_bytes or total + len(raw) > self.max_total_bytes or b"\x00" in raw:
+                    self.truncated = True
+                    self.warnings.append(f"Skipped oversized or binary file: {path}")
+                    continue
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeError:
+                    self.truncated = True
+                    self.warnings.append(f"Skipped non-UTF-8 file: {path}")
+                    continue
+                total += len(raw)
+                items.append(NormalizedRecord("github", f"{source_ref}:{path}", kind, path,
+                    f"File: {path}\n{text}", None, data.get("html_url"),
+                    _dt(head["commit"].get("committer", {}).get("date")), source_ref,
+                    {"path": path, "repository": source_ref, "blob_sha": ent.get("sha"), "commit_sha": ref}))
+            return items
+        except ConnectorRateLimited:
+            raise
+        except (ConnectorError, KeyError, ValueError) as e:
+            self.warnings.append("Repository file fetch incomplete: " + str(e)[:150])
+            self.truncated = True
+            return []
 
     def normalize_record(self, raw, source_ref=""):
         k = raw["_k"]

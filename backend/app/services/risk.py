@@ -88,7 +88,10 @@ def simulate(db, pid, person_key_, user=None, persist=True):
         for ev in evs:
             r = db.get(m.SourceRecord, ev.record_id) if ev.record_id else None
             authors.add(G.norm_person(r.author) if r and r.author else None)
-        if authors and authors == {p.key} :
+        if c.details.get("draft"):
+            continue
+        aliases = {p.key, *(p.props or {}).get("aliases", [])}
+        if authors and None not in authors and authors <= aliases:
             sole += 1
             sole_ids.append(c.id)
     gaps = db.query(m.KnowledgeGap).filter_by(project_id=pid, status="open").all()

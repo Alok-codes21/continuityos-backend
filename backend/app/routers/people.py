@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models as m
 from ..db import get_db
 from ..security import audit, need
-from ..services import handover, interview, ledger
+from ..services import access, handover, interview, ledger
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["people"])
 
@@ -89,6 +89,10 @@ def confirm(interview_id: str, response_id: str, ctx=Depends(need("contributor")
 @router.post("/interviews/{interview_id}/complete")
 def complete(interview_id: str, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     iv = _iv(db, ctx, interview_id)
+    pending = db.query(m.Approval).filter_by(project_id=ctx.pid, kind="interview_answer", status="pending").all()
+    response_ids = {r.id for r in db.query(m.InterviewResponse).filter_by(interview_id=iv.id)}
+    if any(a.target_id in response_ids for a in pending):
+        raise HTTPException(409, "Decide pending interview answers before completion")
     iv.status = "completed"
     db.commit()
     return {"ok": True}
@@ -135,7 +139,7 @@ def scope_change(body: dict, ctx=Depends(need("contributor")), db: Session = Dep
 @router.post("/handovers", status_code=201)
 def gen_handover(body: dict, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     inc = body.get("incoming_user_id")
-    if inc and not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=inc).first():
+    if inc and (not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=inc).first() or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=inc).first()):
         raise HTTPException(404, "Incoming user not found")
     h = handover.generate(db, ctx.project, str(body.get("person", "")), ctx.user, ctx.org_role, inc, str(body.get("role_profile", ""))[:200])
     audit(db, "handover_generated", ctx.user, ctx.org_id, ctx.pid, "handover", h.id)
@@ -149,6 +153,12 @@ def _h(db, ctx, hid):
         raise HTTPException(404, "Not found")
     if ctx.org_role not in ("manager", "admin") and not (h.incoming_user_id == ctx.user.id and h.summary.get("status") == "approved"):
         raise HTTPException(404, "Not found")
+    if ctx.org_role not in ("manager", "admin"):
+        for item in db.query(m.HandoverItem).filter_by(handover_id=h.id):
+            if item.claim_id:
+                claim = db.get(m.Claim, item.claim_id)
+                if not claim or not access.can_see_level(ctx.org_role, access.claim_level(db, claim)):
+                    raise HTTPException(409, "Handover evidence access changed; ask a manager to regenerate it")
     return h
 
 

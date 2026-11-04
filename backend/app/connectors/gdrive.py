@@ -2,6 +2,7 @@
 from datetime import datetime
 
 import httpx
+import json
 
 from .base import ConnectorError, ConnectorForbidden, ConnectorRateLimited, NormalizedRecord, SourceConnector
 
@@ -23,6 +24,7 @@ class GoogleDriveConnector(SourceConnector):
         self.token = token  # OAuth access token with the drive.readonly scope
         self.client = client or httpx.Client(timeout=30)
         self.warnings = []
+        self.next_cursor, self.truncated = None, False
 
     def authenticate(self, credentials):
         self.token = credentials.get("token", "")
@@ -55,6 +57,10 @@ class GoogleDriveConnector(SourceConnector):
         if since:
             q += f" and modifiedTime > '{since.isoformat()}Z'"
         files, token = [], None
+        try:
+            token = json.loads(cursor).get("page") if cursor and cursor.startswith("{") else None
+        except ValueError:
+            pass
         for _ in range(5):
             params = {"q": q, "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName))", "pageSize": self.max_files}
             if token:
@@ -66,6 +72,10 @@ class GoogleDriveConnector(SourceConnector):
                 break
         d = {"files": files[: self.max_files]}
         recs, self.warnings = [], []
+        self.truncated = bool(token)
+        self.next_cursor = json.dumps({"page": token}) if token else None
+        if token:
+            self.warnings.append("Drive sync capped; continuation saved")
         for f in d.get("files", []):
             try:
                 if f["mimeType"] == DOC:
@@ -76,6 +86,8 @@ class GoogleDriveConnector(SourceConnector):
                 self.warnings.append(f"{f.get('name')}: no permission, skipped")
                 continue
             if body.strip():
+                if len(body) > MAX_CHARS:
+                    self.warnings.append(f"Text truncated at {MAX_CHARS} characters: {f.get('name')}")
                 recs.append(self.normalize_record({**f, "_text": body[:MAX_CHARS]}, source_ref))
         return [r for r in recs if not until or not r.occurred_at or r.occurred_at <= until]
 

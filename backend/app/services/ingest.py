@@ -2,6 +2,7 @@
 -> injection flag -> extract -> provenance -> embed -> claims/ledger -> graph."""
 import hashlib
 import re
+from datetime import timezone
 
 from .. import models as m
 from . import claims_engine, graph, ledger
@@ -47,7 +48,12 @@ def selection_allows(rec, selections):
     for s in selections:
         if not s.included:
             continue
-        if rec.occurred_at and ((s.date_from and rec.occurred_at < s.date_from) or (s.date_to and rec.occurred_at > s.date_to)):
+        def utc(value):
+            return value.astimezone(timezone.utc).replace(tzinfo=None) if value and value.tzinfo else value
+        when, start, end = utc(rec.occurred_at), utc(s.date_from), utc(s.date_to)
+        if (start or end) and not when:
+            continue
+        if when and ((start and when < start) or (end and when > end)):
             continue
         if s.content_types and rec.record_type not in s.content_types:
             continue
@@ -62,6 +68,12 @@ def _upsert_claim(db, project, rec, item, quote_ok, location, author_user):
         if c.statement.strip().lower() == item.statement.strip().lower():
             if not db.query(m.EvidenceLink).filter_by(claim_id=c.id, record_id=rec.id).first():
                 db.add(m.EvidenceLink(claim_id=c.id, record_id=rec.id, excerpt=item.excerpt[:500], location=location, quote_verified=quote_ok))
+            if quote_ok and item.status == "evidence_backed" and c.details.get("base_status") == "inferred" and not c.details.get("manual_status") and c.status != "verified":
+                old = c.status
+                c.details = {**c.details, "base_status": "evidence_backed"}
+                c.status = "evidence_backed"
+                ledger.append(db, project.id, "claim_evidence_upgraded", "claim", c.id, record_id=rec.id,
+                              previous_state={"status": old}, new_state={"status": c.status}, permission=rec.visibility)
             return c, False
     details = {**item.details, "base_status": status, "source_title": rec.title, "source_type": rec.source_type,
                "author": rec.author}
@@ -97,7 +109,7 @@ def _side_tables(db, project, rec, item, claim):
         db.add(m.Decision(project_id=project.id, claim_id=claim.id, title=item.statement[:500], decided_by=d.get("decided_by"), participants=people,
                           alternatives=d.get("alternatives", []), rationale=d.get("rationale", ""), decided_at=rec.occurred_at or m.now(),
                           record_id=rec.id))
-    if item.category == "task" and not db.query(m.Task).filter_by(project_id=project.id, title=item.statement[:500]).first():
+    if item.category == "task" and not any(t.title == item.statement[:500] for t in db.query(m.Task).filter_by(project_id=project.id, record_id=rec.id)):
         db.add(m.Task(project_id=project.id, title=item.statement[:500], assignee_key=person_key(d["assignee"]) if d.get("assignee") else None,
                       status="done" if d.get("done") else "open", record_id=rec.id))
 
@@ -117,21 +129,32 @@ def ingest_records(db, project, source, records, actor=None, selections=None, jo
             continue  # integration scope was not approved for this kind of record
         if r.author and r.author.lower() in opted_out:
             continue  # individual withdrew consent for their contributions
-        if opt_in_mode and r.record_type != "document" and (not r.author or r.author.lower() not in opted_in):
+        if opt_in_mode and not (r.record_type == "document" and r.source_type == "manual_upload") and (not r.author or r.author.lower() not in opted_in):
             continue  # opt-in project: only people who explicitly said yes are ingested (uploaded documents are added by a manager)
         clean, findings = redact(r.content)
         title, tfind = redact(r.title or "")
         injected = looks_like_injection(r.content) or looks_like_injection(r.title or "")
-        h = hashlib.sha256((r.source_type + "\n" + clean).encode()).hexdigest()
-        if db.query(m.SourceRecord.id).filter_by(project_id=project.id, content_hash=h).first():
+        # Version fingerprints include provenance and significant metadata. Only the
+        # latest version can be a duplicate, so A -> B -> A remains a real update.
+        import json
+        identity = dict(project_id=project.id, source_id=source.id if source else None,
+                        source_type=r.source_type, external_id=r.external_id)
+        prev = db.query(m.SourceRecord).filter_by(**identity).order_by(m.SourceRecord.version.desc()).first()
+        fingerprint = json.dumps([clean, title, r.author, r.url, r.record_type, r.meta or {}, injected], sort_keys=True, default=str)
+        digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+        version = prev.version + 1 if prev else 1
+        h = hashlib.sha256((json.dumps(identity, sort_keys=True) + ':' + digest).encode()).hexdigest()
+        # Include version to permit historical content reverts with the existing
+        # uniqueness constraint; only compare against the latest version.
+        if prev and prev.content_hash == hashlib.sha256((h + ':' + str(prev.version)).encode()).hexdigest():
             job.duplicates += 1
             continue
-        prev = db.query(m.SourceRecord).filter_by(project_id=project.id, source_type=r.source_type, external_id=r.external_id).order_by(m.SourceRecord.version.desc()).first()
+        h = hashlib.sha256((h + ':' + str(version)).encode()).hexdigest()
         rec = m.SourceRecord(org_id=project.org_id, project_id=project.id, source_id=source.id if source else None, source_type=r.source_type,
                              external_id=r.external_id, record_type=r.record_type, title=title[:500], content=clean, author=r.author,
                              url=r.url, occurred_at=r.occurred_at or m.now(), content_hash=h, redactions=len(findings) + len(tfind),
                              injection_suspected=injected, version=(prev.version + 1) if prev else 1,
-                             visibility="restricted" if (looks_confidential(clean) or (r.meta or {}).get("visibility") == "restricted") else "project",
+                             visibility="restricted" if (looks_confidential(clean) or looks_confidential(title) or (r.meta or {}).get("visibility") == "restricted") else "project",
                              processing_status="flagged" if injected else "processed")
         rec._extra_people = sorted({*((r.meta or {}).get("reviewers") or []), *((r.meta or {}).get("assignees") or []),
                                     *[o.author for o in records if o.author and (r.meta or {}).get("thread_ts")

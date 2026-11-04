@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from .. import models as m
 from . import llm, claims_engine, graph, ledger
-from .extract import NUMWORDS, comp_base, person_key
+from .extract import NUMWORDS, comp_base, person_key, extract
 
 DETAIL_MIN_WORDS = 4
 
@@ -44,6 +44,8 @@ def create(db, project, person_key_, created_by):
     p = graph.resolve_person(db, project.id, person_key_)
     if not p:
         raise HTTPException(404, "Person not found")
+    if not p.user_id:
+        raise HTTPException(409, "Bind this person to a project member before starting an interview")
     claims_engine.rebuild_gaps(db, project.id)
     comps, decs = _person_scope(db, project.id, p)
     gaps = db.query(m.KnowledgeGap).filter_by(project_id=project.id, status="open").all()
@@ -155,11 +157,13 @@ def respond(db, project, iv, q, answer, user):
     db.add(resp)
     db.flush()
     claim = None
+    if g and g.gap_type == "no_documented_owner" and re.search(r"\band\b|,", answer, re.I):
+        raise HTTPException(422, "Name one owner in this answer; document backup ownership separately")
     if g and g.gap_type != "conflict":
         claim = _draft_claim(db, project, iv, g, answer, resp)
         resp.claim_id = claim.id
     fq = _followup(db, iv, q, answer)
-    q.status = "followup" if fq else "answered"
+    q.status = "followup" if fq else "drafted"
     ledger.append(db, project.id, "interview_answer_drafted", "interview_response", resp.id, actor=user.id,
                   new_state={"question": q.id, "gap": g.gap_type if g else None}, verification="inferred")
     db.flush()
@@ -196,7 +200,17 @@ def confirm(db, project, iv, resp, user):
         raise HTTPException(404, "Not found")
     if iv.person_user_id != user.id:
         raise HTTPException(403, "Only the interviewed person can confirm their answers")
+    if iv.status != "active":
+        raise HTTPException(409, "Interview is not active")
+    existing = db.query(m.Approval).filter_by(project_id=project.id, kind="interview_answer", target_id=resp.id, status="pending").first()
+    if existing:
+        return existing
+    if resp.manager_approved:
+        raise HTTPException(409, "Answer already approved")
     resp.employee_confirmed = True
+    question = db.get(m.InterviewQuestion, resp.question_id)
+    if question:
+        question.status = "awaiting_approval"
     ap = m.Approval(project_id=project.id, kind="interview_answer", target_id=resp.id, status="pending",
                     payload={"interview_id": iv.id, "question_id": resp.question_id, "answered_by": iv.person_key,
                              "answer": resp.answer, "answerer_user_id": user.id}, requested_by=user.id)
@@ -210,6 +224,7 @@ def _verify(db, project, claim, approver):
     prev = claim.status
     d = dict(claim.details)
     d.pop("draft", None)
+    d["verification_method"] = "approved_interview"
     claim.details = d
     claim.status, claim.verified_by = "verified", approver.id
     ledger.append(db, project.id, "claim_verified", "claim", claim.id, actor=approver.id, previous_state={"status": prev},
@@ -219,7 +234,15 @@ def _verify(db, project, claim, approver):
 def _apply_approved(db, project, resp, approver):
     q = db.get(m.InterviewQuestion, resp.question_id)
     iv = db.get(m.HandoverInterview, resp.interview_id)
+    if not iv or iv.project_id != project.id or not q or q.interview_id != iv.id:
+        raise HTTPException(404, "Interview context not found")
     g = db.get(m.KnowledgeGap, q.gap_id) if q.gap_id else None
+    if g and g.project_id != project.id:
+        raise HTTPException(404, "Gap not found")
+    if resp.claim_id:
+        claim = db.get(m.Claim, resp.claim_id)
+        if not claim or claim.project_id != project.id:
+            raise HTTPException(404, "Claim not found")
     resolved_comp = None
     if g and g.gap_type == "conflict":
         vals = {c.id: c for c in db.query(m.Claim).filter_by(project_id=project.id, subject_key=g.entity_key, category="config_value")
@@ -244,7 +267,7 @@ def _apply_approved(db, project, resp, approver):
             db.delete(mc)
         db.flush()
         _verify(db, project, claim, approver)
-        if claim.category == "bug" or g.gap_type == "unresolved_bug":
+        if claim.category == "bug" or (g and g.gap_type == "unresolved_bug"):
             pass
         resolved_comp = claim.details.get("component")
         if claim.category == "owner":
@@ -267,6 +290,10 @@ def _apply_approved(db, project, resp, approver):
             db.add(m.EvidenceLink(claim_id=hc.id, interview_response_id=resp.id, excerpt=resp.answer[:500], location="interview answer", quote_verified=True))
             ledger.append(db, project.id, "claim_verified", "claim", hc.id, actor=approver.id, new_state={"status": "verified"}, verification="verified")
     q.status = "answered"
+    if q.parent_question_id:
+        parent = db.get(m.InterviewQuestion, q.parent_question_id)
+        if parent and parent.interview_id == iv.id:
+            parent.status = "answered"
     resp.manager_approved = True
     db.flush()
     claims_engine.rebuild_gaps(db, project.id)
@@ -283,6 +310,11 @@ def decide(db, project, ap, approve, approver, note=""):
     if approve:
         if ap.kind == "interview_answer":
             resp = db.get(m.InterviewResponse, ap.target_id)
+            iv = db.get(m.HandoverInterview, resp.interview_id) if resp else None
+            if not resp or not iv or iv.project_id != project.id or iv.status != "active":
+                raise HTTPException(409, "Interview answer is no longer active")
+            if resp.manager_approved:
+                raise HTTPException(409, "Answer already approved")
             if not resp.employee_confirmed:
                 raise HTTPException(409, "The employee has not confirmed this answer")
             _apply_approved(db, project, resp, approver)
@@ -295,6 +327,11 @@ def decide(db, project, ap, approve, approver, note=""):
             _apply_scope(db, project, ap, approver)
         else:
             raise HTTPException(422, "Unknown approval kind")
+    if not approve and ap.kind == "interview_answer":
+        response = db.get(m.InterviewResponse, ap.target_id)
+        question = db.get(m.InterviewQuestion, response.question_id) if response else None
+        if question:
+            question.status = "rejected"
     ap.status = "approved" if approve else "rejected"
     ap.decided_by, ap.note, ap.decided_at = approver.id, note[:500], m.now()
     ledger.append(db, project.id, f"approval_{ap.status}", "approval", ap.id, actor=approver.id, new_state={"kind": ap.kind},
@@ -308,9 +345,25 @@ def _apply_correction(db, project, ap, approver):
     if not c or c.project_id != project.id:
         raise HTTPException(404, "Claim not found")
     prev = c.status
-    c.statement = ap.payload["corrected_statement"][:1000]
+    statement = ap.payload["corrected_statement"][:1000]
+    parsed = [i for i in extract("document", "", statement, None, {}) if i.category == c.category]
+    if len(parsed) != 1:
+        raise HTTPException(422, "Correction must unambiguously describe one claim of the same category")
+    item = parsed[0]
+    c.details = {**item.details, "base_status": "verified", "manual_status": True,
+                 "verification_method": "approved_correction", "correction_reason": ap.payload.get("reason", ""),
+                 "previous_statement": c.statement, "original_claim_key": c.subject_key}
+    c.statement, c.subject_key = item.statement, item.subject_key
     c.status, c.verified_by = "verified", approver.id
-    ledger.append(db, project.id, "claim_corrected", "claim", c.id, actor=approver.id, previous_state={"status": prev}, new_state={"status": "verified"}, verification="verified")
+    for decision in db.query(m.Decision).filter_by(claim_id=c.id):
+        decision.title = c.statement
+        decision.rationale = c.details.get("rationale", "")
+    for key in ("component", "from", "to"):
+        if c.details.get(key):
+            claims_engine.upsert_component(db, project.id, c.details[key])
+    ledger.append(db, project.id, "claim_corrected", "claim", c.id, actor=approver.id, previous_state={"status": prev},
+                  new_state={"status": "verified", "method": "approved_correction"}, verification="verified")
+    claims_engine.reconcile(db, project.id)
     graph.rebuild_graph(db, project.id)
 
 

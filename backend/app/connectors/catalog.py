@@ -6,7 +6,7 @@ from .slack import SlackConnector
 from .manual_upload import ManualUploadConnector
 
 CATALOG = [
-    {"id": "github", "name": "GitHub", "category": "development", "implemented": True, "note": "Repos, commits, PRs, issues, CODEOWNERS"},
+    {"id": "github", "name": "GitHub", "category": "development", "implemented": True, "note": "Repos, commits, PRs, issues, CODEOWNERS and explicitly selected docs/code snapshots"},
     {"id": "gitlab", "name": "GitLab", "category": "development", "implemented": False, "note": "Coming soon"},
     {"id": "jira", "name": "Jira", "category": "development", "implemented": False, "note": "Coming soon"},
     {"id": "slack", "name": "Slack", "category": "communication", "implemented": True, "note": "Selected public channels the bot was invited to (read-only)"},

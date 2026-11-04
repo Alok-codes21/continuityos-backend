@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -35,11 +35,11 @@ def _org(org_id, db, user, min_role):
         raise HTTPException(403, f"Requires {min_role} role")
 
 
-SCOPE_TYPES = {"commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
+SCOPE_TYPES = {"code_files": ("code_file",), "commits": ("commit",), "pull_requests": ("pull_request",), "issues": ("issue",), "codeowners": ("codeowners",),
                "documents": ("document", "meeting"), "messages": ("message",), "repo": ("commit", "pull_request", "issue", "codeowners")}
 CONNECTOR_DEFAULT_SCOPES = {"github": ["repo"], "slack": ["messages"], "google_drive": ["documents"], "manual_upload": ["documents"]}
 # which scopes each connector may hold; anything else is rejected
-CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners"},
+CONNECTOR_SCOPES = {"github": {"repo", "commits", "pull_requests", "issues", "codeowners", "documents", "code_files"},
                     "slack": {"messages"}, "google_drive": {"documents"}, "manual_upload": {"documents"}}
 
 
@@ -115,6 +115,7 @@ class SourceIn(BaseModel):
     integration_id: str
     source_ref: str = Field(max_length=300)
     name: str = Field(default="", max_length=300)
+    file_paths: list[str] = Field(default_factory=list, max_length=40)
 
 
 def _source(db, ctx, sid):
@@ -129,6 +130,7 @@ def sources(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     out = []
     for s in db.query(m.Source).filter_by(project_id=ctx.pid):
         out.append({"id": s.id, "type": s.source_type, "ref": s.external_id, "name": s.name, "integration_id": s.integration_id,
+                    "file_paths": ((db.get(m.Integration, s.integration_id).scopes or {}).get("selected_files", {}).get(s.external_id, []) if s.integration_id and db.get(m.Integration, s.integration_id) else []),
                     "records": db.query(m.SourceRecord).filter_by(source_id=s.id).count(),
                     "selections": [{"id": x.id, "included": x.included, "date_from": x.date_from, "date_to": x.date_to, "content_types": x.content_types}
                                    for x in db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id)]})
@@ -157,12 +159,27 @@ def add_source(body: SourceIn, ctx=Depends(need("manager")), db: Session = Depen
     db.add(s)
     db.flush()
     db.add(m.SourceSelection(integration_id=i.id, project_id=ctx.pid, source_ref=body.source_ref, included=True, content_types=[]))
+    _save_file_paths(i, body.source_ref, body.file_paths)
     audit(db, "source_added", ctx.user, ctx.org_id, ctx.pid, "source", s.id)
     db.commit()
     return {"id": s.id}
 
 
+def _save_file_paths(integration, source_ref, paths):
+    if paths is None:
+        return
+    if paths and integration.connector != "github":
+        raise HTTPException(422, "File paths are supported only for GitHub")
+    if any(not p or len(p) > 250 or p.startswith("/") or ".." in p.split("/") or "\\" in p for p in paths):
+        raise HTTPException(422, "File paths must be relative repository paths or glob patterns")
+    data = dict(integration.scopes or {})
+    selected = dict(data.get("selected_files") or {})
+    selected[source_ref] = list(dict.fromkeys(paths))
+    integration.scopes = {**data, "selected_files": selected}
+
+
 class SelectionIn(BaseModel):
+    file_paths: list[str] | None = Field(default=None, max_length=40)
     included: bool = True
     date_from: datetime | None = None
     date_to: datetime | None = None
@@ -171,11 +188,18 @@ class SelectionIn(BaseModel):
 
 @router.put("/projects/{project_id}/sources/{source_id}/selection")
 def set_selection(source_id: str, body: SelectionIn, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    for field in ("date_from", "date_to"):
+        dt = getattr(body, field)
+        if dt and dt.tzinfo:
+            setattr(body, field, dt.astimezone(timezone.utc).replace(tzinfo=None))
+    if body.date_from and body.date_to and body.date_from > body.date_to:
+        raise HTTPException(422, "date_from must not be after date_to")
     s = _source(db, ctx, source_id)
     sel = db.query(m.SourceSelection).filter_by(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id).first()
     if not sel:
         sel = m.SourceSelection(integration_id=s.integration_id, project_id=ctx.pid, source_ref=s.external_id)
         db.add(sel)
+    _save_file_paths(db.get(m.Integration, s.integration_id), s.external_id, body.file_paths)
     sel.included, sel.date_from, sel.date_to, sel.content_types = body.included, body.date_from, body.date_to, body.content_types
     db.flush()
     ledger.append(db, ctx.pid, "scope_changed", "selection", sel.id, actor=ctx.user.id, new_state={"included": sel.included}, verification="verified")
@@ -199,8 +223,14 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
     db.add(job)
     db.flush()
     sels = db.query(m.SourceSelection).filter_by(integration_id=i.id, project_id=ctx.pid, source_ref=s.external_id).all()
+    scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
+    # fail closed: no approved scope means ingest nothing, not everything
+    allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
     try:
         conn = catalog.get_connector(i.connector, decrypt_token(i.encrypted_token))
+        if i.connector == "github":
+            conn.allowed_types = allowed & set().union(*(set(sel.content_types) if sel.content_types else allowed for sel in sels if sel.included)) if sels else allowed
+            conn.file_paths = (i.scopes or {}).get("selected_files", {}).get(s.external_id, [])
         records = conn.fetch_records(s.external_id, cursor=s.last_cursor)
     except ConnectorRateLimited as e:
         job.status, job.error = "rate_limited", str(e)
@@ -210,13 +240,12 @@ def sync(source_id: str, ctx=Depends(need("manager")), db: Session = Depends(get
         job.status, job.error = "failed", str(e)[:500]
         db.commit()
         raise HTTPException(502, "Source fetch failed")
-    scopes = [p.scope for p in db.query(m.IntegrationPermission).filter_by(integration_id=i.id, approved=True)]
-    # fail closed: no approved scope means ingest nothing, not everything
-    allowed = {t for sc in scopes for t in SCOPE_TYPES.get(sc, ())}
     ingest.ingest_records(db, ctx.project, s, records, actor=ctx.user, selections=sels, job=job, allowed_types=allowed)
     if getattr(conn, "warnings", None):
         job.error = "partial: " + "; ".join(conn.warnings)[:450]
-    if not getattr(conn, "truncated", False):  # a capped fetch must not move the cursor, or the rest would be skipped forever
+    if hasattr(conn, "next_cursor"):
+        s.last_cursor = conn.next_cursor
+    elif not getattr(conn, "truncated", False):  # a capped fetch must not move the cursor, or the rest would be skipped forever
         s.last_cursor = datetime.utcnow().isoformat()
     audit(db, "source_synced", ctx.user, ctx.org_id, ctx.pid, "source", s.id, stored=job.stored)
     db.commit()
@@ -229,8 +258,10 @@ def jobs(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/uploads", status_code=201)
-async def upload(file: UploadFile = File(...), visibility: str = Form("project"), author: str = Form(""),
+async def upload(file: UploadFile = File(...), visibility: str = Form("project"), author: str = Form(""), record_type: str = Form("auto"),
                  ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+    if record_type not in ("auto", "document", "meeting"):
+        raise HTTPException(422, "Record type must be auto, document or meeting")
     name = safe_name(file.filename)
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXT:
@@ -259,6 +290,8 @@ async def upload(file: UploadFile = File(...), visibility: str = Form("project")
         db.add(src)
         db.flush()
     rec = ManualUploadConnector().normalize_record({"filename": name, "text": text, "author": author or None, "occurred_at": m.now()})
+    if record_type != "auto":
+        rec.record_type = record_type
     rec.meta = {"visibility": visibility}
     job = ingest.ingest_records(db, ctx.project, src, [rec], actor=ctx.user)
     srec = db.query(m.SourceRecord).filter_by(project_id=ctx.pid, source_id=src.id, external_id=name).order_by(m.SourceRecord.version.desc()).first()
@@ -300,13 +333,41 @@ def _purge(db, ctx, r):
         db.delete(ev)
         db.flush()
         c = db.get(m.Claim, cid)
-        if c and not db.query(m.EvidenceLink).filter_by(claim_id=cid).count() and c.status != "verified":
+        if c and not db.query(m.EvidenceLink).filter_by(claim_id=cid).count():
+            db.query(m.Decision).filter_by(claim_id=cid).delete()
+            db.query(m.Approval).filter_by(project_id=ctx.pid, target_id=cid).delete()
             db.delete(c)
             removed_claims += 1
+        elif c:
+            # Derived metadata from the removed source must not survive on a
+            # claim supported independently elsewhere.
+            c.details = {k: v for k, v in c.details.items() if k not in ("source_title", "source_type", "author", "participants")}
+    db.query(m.Task).filter_by(record_id=r.id).delete()
+    db.query(m.Decision).filter_by(record_id=r.id).delete()
+    # Materialized snapshots can contain deleted excerpts. Invalidate rather
+    # than pretend they remain safe/current after consent withdrawal.
+    for h in db.query(m.Handover).filter_by(project_id=ctx.pid).all():
+        db.query(m.HandoverItem).filter_by(handover_id=h.id).delete()
+        db.query(m.Approval).filter_by(project_id=ctx.pid, target_id=h.id).delete()
+        db.delete(h)
+    db.query(m.RehearsalSession).filter_by(project_id=ctx.pid).delete()
+    db.query(m.RiskRecord).filter_by(project_id=ctx.pid).delete()
+    db.query(m.KnowledgeGap).filter(m.KnowledgeGap.project_id == ctx.pid, m.KnowledgeGap.gap_type != "unanswered_question").delete()
     db.query(m.DocumentChunk).filter_by(record_id=r.id).delete()
     db.query(m.Document).filter_by(record_id=r.id).delete()
     ledger.append(db, ctx.pid, "record_deleted", "record", r.id, actor=ctx.user.id, new_state={"claims_removed": removed_claims}, verification="verified")
     db.delete(r)
+    db.flush()
+    used = set()
+    for c in db.query(m.Claim).filter_by(project_id=ctx.pid):
+        if c.created_by.startswith("system:missing"):
+            continue
+        for key in ("component", "from", "to"):
+            if isinstance(c.details.get(key), str):
+                used.add(c.details[key])
+    for comp in db.query(m.Component).filter_by(project_id=ctx.pid).all():
+        if comp.key not in used:
+            db.delete(comp)
     db.flush()
     return removed_claims
 
@@ -349,7 +410,7 @@ def set_consent(body: dict, ctx=Depends(need("manager")), db: Session = Depends(
     if not author:
         raise HTTPException(422, "author required")
     granted = bool(body.get("granted", False))
-    c = db.query(m.ContributorConsent).filter_by(project_id=ctx.pid, author=author).first()
+    c = next((x for x in db.query(m.ContributorConsent).filter_by(project_id=ctx.pid) if x.author.lower() == author.lower()), None)
     if not c:
         c = m.ContributorConsent(project_id=ctx.pid, author=author)
         db.add(c)
@@ -375,6 +436,13 @@ def consent_mode(body: dict, ctx=Depends(need("manager")), db: Session = Depends
     if mode not in ("opt_out", "opt_in"):
         raise HTTPException(422, "mode must be opt_out or opt_in")
     ctx.project.consent_mode = mode
+    if mode == "opt_in":
+        allowed = {c.author.lower() for c in db.query(m.ContributorConsent).filter_by(project_id=ctx.pid, granted=True)}
+        for r in db.query(m.SourceRecord).filter_by(project_id=ctx.pid).all():
+            if r.record_type != "document" and (not r.author or r.author.lower() not in allowed):
+                _purge(db, ctx, r)
+        claims_engine.reconcile(db, ctx.pid)
+        graph.rebuild_graph(db, ctx.pid)
     ledger.append(db, ctx.pid, "consent_mode_changed", "project", ctx.pid, actor=ctx.user.id, new_state={"mode": mode}, verification="verified")
     audit(db, "consent_mode_changed", ctx.user, ctx.org_id, ctx.pid, mode=mode)
     db.commit()

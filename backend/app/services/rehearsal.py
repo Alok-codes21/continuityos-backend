@@ -30,14 +30,17 @@ def scenarios(db, project, role, limit=8):
 
 def evaluate(db, project, user, role):
     results = []
-    for sc in scenarios(db, project, role):
+    eligible = scenarios(db, project, role, limit=100000)
+    for sc in eligible[:8]:
         r = rag.ask(db, project, user, role, sc["question"], log_gap=False)
-        ok = r["answered"] and bool(r["citations"])
+        ok = r["answered"] and bool(r["citations"]) and all(c.get("status") not in ("conflicting", "outdated", "superseded") for c in r["citations"])
+        if sc["topic"].startswith("conflict:"):
+            ok = False
         if ok and sc["expect"] and sc["expect"][0]:
             ok = sc["expect"][0] in r["answer"].lower()
         results.append({"topic": sc["topic"], "question": sc["question"], "covered": ok, "citations": len(r["citations"])})
     total = len(results)
     score = round(sum(1 for r in results if r["covered"]) / total, 2) if total else 0.0
     level = "ready" if total and score >= 0.8 else "partly_ready" if total and score >= 0.5 else "not_ready"
-    return {"scenarios": total, "score": score, "readiness": level, "results": results,
+    return {"assessment_type": "workspace_knowledge_coverage", "not_employee_competency": True, "eligible_scenarios": len(eligible), "omitted_scenarios": max(0, len(eligible)-total), "scenarios": total, "score": score, "readiness": level, "results": results,
             "missed_topics": [r["topic"] for r in results if not r["covered"]]}

@@ -32,7 +32,7 @@ def verify_password(pw: str, hashed: str) -> bool:
 
 def make_token(user_id: str, jti: str = "") -> str:
     exp = datetime.now(timezone.utc) + timedelta(hours=settings.jwt_hours)
-    return jwt.encode({"sub": user_id, "exp": exp, "iat": datetime.now(timezone.utc)}, settings.jwt_secret, algorithm="HS256")
+    return jwt.encode({"sub": user_id, "exp": exp, "iat": datetime.now(timezone.utc).timestamp()}, settings.jwt_secret, algorithm="HS256")
 
 
 def _fernet() -> Fernet:
@@ -58,7 +58,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> m.User:
     user = db.get(m.User, data["sub"])
     if not user:
         raise HTTPException(401, "Unknown user")
-    if user.sessions_revoked_at and data.get("iat", 0) < int(user.sessions_revoked_at.replace(tzinfo=timezone.utc).timestamp()):
+    if user.sessions_revoked_at and data.get("iat", 0) < user.sessions_revoked_at.replace(tzinfo=timezone.utc).timestamp():
         raise HTTPException(401, "Session revoked")
     return user
 

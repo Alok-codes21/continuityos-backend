@@ -41,7 +41,7 @@ def overview(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     score = round(100 * sum(WEIGHTS.get(k, 0) * v for k, v in counts.items()) / live) if live else 0
     ok_claims = {c.id for c in access.visible_claims(db, ctx.pid, ctx.org_role)}
     decisions = [d for d in db.query(m.Decision).filter_by(project_id=ctx.pid).order_by(m.Decision.decided_at.desc())
-                 if not d.claim_id or d.claim_id in ok_claims][:5]
+                 if d.claim_id in ok_claims][:5]
     today = m.now().date()
     days = {(today - timedelta(days=i)): 0 for i in range(13, -1, -1)}
     for r in db.query(m.SourceRecord).filter(m.SourceRecord.project_id == ctx.pid, m.SourceRecord.ingested_at >= m.now() - timedelta(days=14)):
@@ -69,7 +69,7 @@ def claims(status: str | None = None, category: str | None = None, q: str | None
 @router.get("/claims/{claim_id}")
 def claim(claim_id: str, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     d = claim_dict(db, c, ctx.org_role, True)
     d["history"] = [{"seq": e.seq, "type": e.event_type, "at": e.occurred_at.isoformat(), "verification": e.verification}
@@ -85,7 +85,7 @@ class CorrectionIn(BaseModel):
 @router.post("/claims/{claim_id}/corrections", status_code=201)
 def correct(claim_id: str, body: CorrectionIn, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     ap = m.Approval(project_id=ctx.pid, kind="member_correction", target_id=c.id, status="pending", requested_by=ctx.user.id,
                     payload={"claim_id": c.id, "corrected_statement": body.corrected_statement, "reason": body.reason, "original": c.statement})
@@ -104,13 +104,17 @@ def needs_reverification(ctx=Depends(need("manager")), db: Session = Depends(get
 def reverify(claim_id: str, body: dict | None = None, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     """A manager confirms a stale or source-changed verified claim is still true. Someone who wrote the claim cannot re-verify it."""
     c = db.get(m.Claim, claim_id)
-    if not c or c.project_id != ctx.pid or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
+    if not c or c.project_id != ctx.pid or c.details.get("draft") or not access.can_see_level(ctx.org_role, access.claim_level(db, c)):
         raise HTTPException(404, "Not found")
     if c.status != "verified":
         raise HTTPException(409, "Only verified claims are re-verified; others go through the approval flow")
     if c.verified_by == ctx.user.id or c.created_by == ctx.user.id:
         raise HTTPException(403, "A different manager must re-verify this claim")
+    reason = str((body or {}).get("reason", "")).strip()[:500]
+    if len(reason) < 5:
+        raise HTTPException(422, "A reason describing the manual check is required")
     d = {k: v for k, v in c.details.items() if k not in ("needs_reverification", "source_changed")}
+    d.update({"reverification_method": "manual_manager_check", "reverification_reason": reason})
     c.details = {**d, "reverified_at": m.now().isoformat(), "reverified_by": ctx.user.id}
     c.freshness = "current"
     ledger.append(db, ctx.pid, "claim_reverified", "claim", c.id, actor=ctx.user.id, previous_state={"freshness": "stale"}, new_state={"freshness": "current"}, verification="verified")
@@ -142,7 +146,8 @@ def ledger_verify(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
 @router.get("/graph")
 def graph_view(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
     restricted_claims = {c.id for c in db.query(m.Claim).filter_by(project_id=ctx.pid) if not access.can_see_level(ctx.org_role, access.claim_level(db, c))}
-    edges = [e for e in db.query(m.GraphEdge).filter_by(project_id=ctx.pid) if e.claim_id not in restricted_claims]
+    edges = [e for e in db.query(m.GraphEdge).filter_by(project_id=ctx.pid) if e.claim_id not in restricted_claims
+             and (not e.record_id or ((rec := db.get(m.SourceRecord, e.record_id)) is not None and access.visible_record(rec, ctx.org_role)))]
     used = {e.src_id for e in edges} | {e.dst_id for e in edges}
     seen_keys = set()
     for c in access.visible_claims(db, ctx.pid, ctx.org_role):
@@ -159,6 +164,18 @@ def graph_view(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
 def people(ctx=Depends(need("manager")), db: Session = Depends(get_db)):
     return [{"key": p.key, "name": p.name, "user_id": p.user_id, "aliases": p.props.get("display_aliases", [])}
             for p in db.query(m.GraphNode).filter_by(project_id=ctx.pid, node_type="person")]
+
+
+@router.put("/graph/people/{person_key}/account")
+def bind_person(person_key: str, body: dict, ctx=Depends(need("manager")), db: Session = Depends(get_db)):
+    person = graph.resolve_person(db, ctx.pid, person_key)
+    user_id = body.get("user_id")
+    if not person or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=user_id).first():
+        raise HTTPException(404, "Person or project member not found")
+    person.user_id = user_id
+    audit(db, "person_account_bound", ctx.user, ctx.org_id, ctx.pid, "person", person.id, user_id=user_id)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/graph/people/merge")
@@ -269,18 +286,20 @@ def rehearsal_get(session_id: str, ctx=Depends(need("incoming")), db: Session = 
 
 
 @router.get("/skills")
-def skills(ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+def skills(ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     return [{"id": s.id, "user_id": s.user_id, "skill": s.skill, "level": s.level, "source": s.source, "approved": s.approved, "profile": s.profile or {}}
             for s in db.query(m.PeopleKnowledge).filter_by(project_id=ctx.pid) if s.approved or ctx.org_role in ("manager", "admin") or s.user_id == ctx.user.id]
 
 
 @router.post("/skills", status_code=201)
-def add_skill(body: dict, ctx=Depends(need("contributor")), db: Session = Depends(get_db)):
+def add_skill(body: dict, ctx=Depends(need("incoming")), db: Session = Depends(get_db)):
     name = str(body.get("skill", "")).strip()[:100]
     if not name:
         raise HTTPException(422, "Skill required")
     mgr = ctx.org_role in ("manager", "admin")
     uid_ = body.get("user_id") if mgr and body.get("user_id") else ctx.user.id
+    if not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=uid_).first() or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=uid_).first():
+        raise HTTPException(404, "Project member not found")
     s = m.PeopleKnowledge(project_id=ctx.pid, user_id=uid_, skill=name, level=str(body.get("level", "working"))[:20], source="self_declared", approved=False,
                         profile={k: [str(x)[:120] for x in (body.get(k) or [])][:20] if isinstance(body.get(k), list) else str(body.get(k) or "")[:500]
                                  for k in ("prior_systems", "approaches", "training_needs", "recommendations")})
@@ -296,6 +315,10 @@ def approve_skill(skill_id: str, ctx=Depends(need("manager")), db: Session = Dep
         raise HTTPException(404, "Not found")
     if s.user_id == ctx.user.id:
         raise HTTPException(403, "You cannot approve your own skill")
+    if not db.query(m.Membership).filter_by(org_id=ctx.org_id, user_id=s.user_id).first() or not db.query(m.ProjectMember).filter_by(project_id=ctx.pid, user_id=s.user_id).first():
+        raise HTTPException(404, "Project member not found")
+    if s.approved:
+        return {"ok": True}
     s.approved = True
     ledger.append(db, ctx.pid, "skill_approved", "skill", s.id, actor=ctx.user.id, verification="verified")
     graph.rebuild_graph(db, ctx.pid)  # approved incoming knowledge becomes part of organisational memory

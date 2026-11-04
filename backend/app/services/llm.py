@@ -22,7 +22,7 @@ def rephrase(question, excerpts):
 
 
 def _rephrase(question, excerpts):
-    prompt = ("Answer the question using ONLY the numbered excerpts. Cite as [n]. If they do not answer it, say so.\n\n"
+    prompt = ("Answer in plain English using ONLY the numbered excerpts. Cite as [n]. If they do not answer it, say so.\n\n"
               + "\n".join(f"[{i + 1}] {e}" for i, e in enumerate(excerpts)) + f"\n\nQuestion: {question}")
     return _rephrase_raw(prompt)
 
@@ -47,7 +47,7 @@ def _rephrase_raw(prompt):
 
 def followup(question, answer):
     """Optional: one short follow-up question that targets what the answer left out. Rule-based follow-ups run first."""
-    out = _rephrase_raw("Ask ONE short follow-up question (max 25 words) about what is missing from this handover answer. "
+    out = _rephrase_raw("Ask ONE short follow-up question in plain English (max 25 words) about what is missing from this handover answer. "
                         "Reply with the question only, or NONE if the answer is complete.\n\nQuestion: " + question + "\nAnswer: " + answer)
     out = (out or "").strip()
     return out if out.endswith("?") and len(out) < 220 and "none" not in out.lower()[:5] else None
@@ -55,6 +55,6 @@ def followup(question, answer):
 
 def entails(excerpt, sentence):
     """Optional second pass: ask the free model whether the excerpt supports the sentence. None when unavailable or unclear."""
-    out = _rephrase_raw("Does the EXCERPT fully support the SENTENCE? Answer only YES or NO.\n\nEXCERPT: " + excerpt + "\nSENTENCE: " + sentence)
+    out = _rephrase_raw("Does the EXCERPT fully support the SENTENCE? Answer in English, only YES or NO.\n\nEXCERPT: " + excerpt + "\nSENTENCE: " + sentence)
     low = (out or "").strip().lower()
-    return True if low.startswith("yes") else False if low.startswith("no") else None
+    return True if low.rstrip(".! ") == "yes" else False if low.rstrip(".! ") == "no" else None
